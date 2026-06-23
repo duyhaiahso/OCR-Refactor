@@ -635,20 +635,34 @@ GET /health
 ### License Status
 
 ```http
+GET /system/license/public
 GET /system/license
 ```
+
+`/system/license/public` is used by the login screen before authentication.
+`/system/license` requires a valid session and is used inside the dashboard.
+Both endpoints trigger a local dongle check through the backend, write a
+`license_logs` row, and return the current state.
 
 Response:
 
 ```json
 {
   "data": {
+    "status": "licensed",
     "licensed": true,
     "donglePresent": true,
-    "lastCheckedAt": "2026-06-09T08:00:00.000Z"
+    "lastCheckedAt": "2026-06-09T08:00:00.000Z",
+    "code": "DONGLE_OK",
+    "message": "Dongle check passed"
   }
 }
 ```
+
+Login must fail closed when the current dongle check is not licensed or the
+dongle is missing. Development can use `DONGLE_MOCK_MODE=true`; production
+should use `DONGLE_MOCK_MODE=false` with `DONGLE_DLL_PATH` pointing at
+`System8.dll`.
 
 ### Shutdown System
 

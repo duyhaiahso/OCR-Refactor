@@ -50,10 +50,12 @@ Backend:
 - Swagger API documentation is implemented at `/api/docs`.
 - Backend inspection foundation now includes a Device Tool client plus `/api/inspections/start`, `/api/inspections/current`, and `/api/inspections/:jobId/stop` with per-ROI inspection logs.
 - Backend camera foundation now proxies Device Tool status, device discovery, connect, grab, and live stream through `/api/camera/status`, `/api/camera/devices`, `/api/camera/connect`, `/api/camera/grab`, and `/api/camera/stream`.
+- Backend license foundation checks the USB dongle through the legacy `System8.dll` flow, records license logs, exposes login/dashboard license status, and blocks login when the dongle is missing unless dongle mock mode is enabled.
 
 Frontend:
 
 - Login exists.
+- Login shows API/license/dongle startup status and disables sign-in until the backend confirms a valid dongle.
 - Dashboard exists.
 - Dashboard currently renders an operator runtime foundation with product selector, API/demo product loading, persisted batch-size save, ROI preview, and OK/NG/batch counters.
 - Role permission screen exists.
@@ -91,7 +93,7 @@ Electron/packaging:
 - Must be added before production release.
 - Electron must become the local app entry point.
 - Final release target is a Windows `.exe`.
-- Electron should eventually handle single instance, app lifecycle, local service startup/shutdown, dongle boot gate, and packaging.
+- Electron should eventually handle single instance, app lifecycle, local service startup/shutdown, full boot-time dongle gate, periodic recheck, and packaging.
 
 ## Current Next Task
 

@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  DEFAULT_CAMERA_STREAM_FPS,
   DEFAULT_CAMERA_STREAM_JPEG_QUALITY,
   DEFAULT_CAMERA_STREAM_MAX_WIDTH,
   getCameraStatus,
@@ -67,7 +66,6 @@ export function useConnectedCameraPreview(expectedDeviceName?: string) {
 
       const socket = new WebSocket(
         getCameraStreamUrl(accessTokenRef.current, {
-          fps: DEFAULT_CAMERA_STREAM_FPS,
           jpegQuality: DEFAULT_CAMERA_STREAM_JPEG_QUALITY,
           maxWidth: DEFAULT_CAMERA_STREAM_MAX_WIDTH,
         }),

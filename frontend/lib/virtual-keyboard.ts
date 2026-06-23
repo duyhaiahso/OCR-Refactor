@@ -147,5 +147,24 @@ function updateTargetValue(
   nativeValueSetter?.call(target, nextValue);
   target.dispatchEvent(new Event("input", { bubbles: true }));
   target.focus();
-  target.setSelectionRange(caretPosition, caretPosition);
+
+  if (supportsSelectionRange(target)) {
+    target.setSelectionRange(caretPosition, caretPosition);
+  }
+}
+
+function supportsSelectionRange(target: VirtualKeyboardTarget) {
+  if (target instanceof HTMLTextAreaElement) {
+    return true;
+  }
+
+  return [
+    "",
+    "text",
+    "search",
+    "email",
+    "tel",
+    "url",
+    "password",
+  ].includes(target.type);
 }

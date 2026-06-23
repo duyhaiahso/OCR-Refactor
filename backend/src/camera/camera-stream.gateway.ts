@@ -1,9 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import { Buffer } from 'node:buffer';
 import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
-import WebSocket, { WebSocketServer } from 'ws';
+import WebSocket, { type RawData, WebSocketServer } from 'ws';
 
 type JwtPayload = {
   sub: string;
@@ -70,11 +71,19 @@ export class CameraStreamGateway {
 
   private proxyCameraStream(client: WebSocket, request: IncomingMessage) {
     const clientUrl = new URL(request.url ?? '/', 'http://localhost');
-    const fps = clientUrl.searchParams.get('fps') ?? '10';
+    const fps = clientUrl.searchParams.get('fps');
+    const debugTiming = clientUrl.searchParams.get('debugTiming');
+    const shouldDebugTiming = debugTiming === '1';
     const jpegQuality = clientUrl.searchParams.get('jpegQuality') ?? '70';
     const maxWidth = clientUrl.searchParams.get('maxWidth') ?? '1600';
-    const toolUrl = this.getToolStreamUrl(fps, jpegQuality, maxWidth);
+    const toolUrl = this.getToolStreamUrl(
+      fps,
+      jpegQuality,
+      maxWidth,
+      debugTiming,
+    );
     const toolSocket = new WebSocket(toolUrl);
+    let lastFrameId: number | null = null;
 
     const closeBoth = () => {
       if (toolSocket.readyState === WebSocket.OPEN) {
@@ -87,9 +96,57 @@ export class CameraStreamGateway {
     };
 
     toolSocket.on('message', (data, isBinary) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(data, { binary: isBinary });
+      if (client.readyState !== WebSocket.OPEN) {
+        return;
       }
+
+      if (shouldDebugTiming && !isBinary) {
+        const receivedAtMs = Date.now();
+        try {
+          const payload = JSON.parse(this.rawDataToText(data)) as {
+            frame_id?: number;
+            type?: string;
+            [key: string]: unknown;
+          };
+
+          if (payload.type === 'frame_meta') {
+            lastFrameId =
+              typeof payload.frame_id === 'number' ? payload.frame_id : null;
+            payload.backend_meta_received_at_ms = receivedAtMs;
+            payload.backend_meta_sent_at_ms = Date.now();
+            client.send(JSON.stringify(payload), { binary: false });
+            return;
+          }
+
+          client.send(data, { binary: false });
+          return;
+        } catch {
+          client.send(data, { binary: false });
+          return;
+        }
+      }
+
+      if (shouldDebugTiming && isBinary) {
+        const receivedAtMs = Date.now();
+        client.send(data, { binary: true }, () => {
+          if (client.readyState !== WebSocket.OPEN) {
+            return;
+          }
+
+          client.send(
+            JSON.stringify({
+              type: 'backend_frame_done',
+              frame_id: lastFrameId,
+              backend_binary_received_at_ms: receivedAtMs,
+              backend_binary_sent_at_ms: Date.now(),
+            }),
+            { binary: false },
+          );
+        });
+        return;
+      }
+
+      client.send(data, { binary: isBinary });
     });
 
     toolSocket.on('error', (error) => {
@@ -112,16 +169,26 @@ export class CameraStreamGateway {
     client.on('error', closeBoth);
   }
 
-  private getToolStreamUrl(fps: string, jpegQuality: string, maxWidth: string) {
+  private getToolStreamUrl(
+    fps: string | null,
+    jpegQuality: string,
+    maxWidth: string,
+    debugTiming: string | null,
+  ) {
     const baseUrl = (
       this.configService.get<string>('DEVICE_TOOL_BASE_URL') ??
       'http://localhost:8000'
     ).replace(/\/+$/, '');
     const url = new URL('/api/v1/camera/stream', baseUrl);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-    url.searchParams.set('fps', fps);
+    if (fps) {
+      url.searchParams.set('fps', fps);
+    }
     url.searchParams.set('jpeg_quality', jpegQuality);
     url.searchParams.set('max_width', maxWidth);
+    if (debugTiming) {
+      url.searchParams.set('debug_timing', debugTiming);
+    }
     return url.toString();
   }
 
@@ -130,5 +197,17 @@ export class CameraStreamGateway {
       `HTTP/1.1 ${statusCode} ${message}\r\nConnection: close\r\n\r\n`,
     );
     socket.destroy();
+  }
+
+  private rawDataToText(data: RawData) {
+    if (Array.isArray(data)) {
+      return Buffer.concat(data).toString('utf8');
+    }
+
+    if (data instanceof ArrayBuffer) {
+      return Buffer.from(data).toString('utf8');
+    }
+
+    return data.toString('utf8');
   }
 }

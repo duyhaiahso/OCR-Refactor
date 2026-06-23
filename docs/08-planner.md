@@ -21,7 +21,7 @@ Build order:
 
 ## Current Status Snapshot
 
-Last updated: 2026-06-16
+Last updated: 2026-06-23
 
 Completed:
 
@@ -42,6 +42,8 @@ Completed:
 - Operator runtime dashboard foundation exists on `/dashboard` with product selector, ROI preview, API/demo product loading, and OK/NG/batch counters.
 - Backend inspection foundation now includes Device Tool client wiring plus `/api/inspections/start`, `/api/inspections/current`, and `/api/inspections/:jobId/stop` with per-ROI inspection logs.
 - Backend camera foundation proxies Device Tool status, device discovery, connect, grab, and live stream through `/api/camera/status`, `/api/camera/devices`, `/api/camera/connect`, `/api/camera/grab`, and `/api/camera/stream`.
+- Backend license foundation checks the legacy `System8.dll` dongle flow, records `license_logs`, exposes public/authenticated license status endpoints, and blocks login when the dongle is missing unless dongle mock mode is enabled.
+- Frontend login shows API/license/dongle startup status and disables sign-in until the backend reports a valid dongle.
 - Dedicated Camera page exists at `/dashboard/camera` with product-profile selection, Device Tool status/device discovery, connect/grab/live controls, view adjustment persistence, and manual refresh for camera status/devices.
 - AppShell warms up camera status/device discovery in the background for users with camera or inspection permissions.
 
@@ -60,7 +62,7 @@ Not started:
 - Dedicated ROI config screen/module.
 - Dedicated history/reports screens and query flows.
 - Electron shell.
-- Dongle boot gate.
+- Full Electron boot-time dongle gate, periodic runtime recheck, and production hardware validation.
 - AI integration.
 
 For detailed handoff, read `docs/11-agent-onboarding.md`.
@@ -265,13 +267,21 @@ Goal: package the app as a local desktop application.
 
 Tasks:
 
-- add Electron main process
-- add preload bridge if needed
-- start backend from Electron
-- open Next.js renderer
-- enforce single instance
-- handle app shutdown
+- add Electron main process `[MVP done]`
+- add preload bridge if needed `[minimal bridge done]`
+- start backend from Electron `[development lifecycle done]`
+- open Next.js renderer `[done]`
+- enforce single instance `[done]`
+- handle app shutdown `[owned-process shutdown done]`
 - prepare build pipeline
+
+Current Electron MVP:
+
+- `electron/` is a dedicated workspace.
+- Existing healthy services on ports `3000`, `4000`, and `8000` are reused.
+- Missing or unhealthy frontend/backend/Device Tool services are started on the first available fallback port in their local range and health-checked.
+- Electron stops only child processes it owns.
+- Installer, bundled production artifacts, dongle gate, and service recovery UI remain pending.
 
 Done when:
 
@@ -286,11 +296,11 @@ Goal: add license protection.
 
 Tasks:
 
-- create dongle/license module
-- implement boot-time check
-- implement retry logic
-- log check result
-- block app if dongle is missing
+- create dongle/license module `[backend foundation done]`
+- implement boot-time check `[login-time backend check done; Electron startup gate pending]`
+- implement retry logic `[backend foundation done]`
+- log check result `[backend foundation done]`
+- block app if dongle is missing `[login blocked; Electron shell block pending]`
 - add periodic runtime recheck
 - add license status screen/state
 

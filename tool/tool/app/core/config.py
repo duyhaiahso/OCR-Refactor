@@ -1,4 +1,5 @@
 import json
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -34,10 +35,15 @@ def get_config() -> AppConfig:
         with config_path.open("r", encoding="utf-8") as f:
             data = json.load(f)
 
+    env_port = os.getenv("DEVICE_TOOL_PORT") or os.getenv("API_PORT")
+    api_port = data.get("api_port", AppConfig().api_port)
+    if env_port:
+        api_port = int(env_port)
+
     config = AppConfig(
         base_dir=base_dir,
         api_host=data.get("api_host", AppConfig().api_host),
-        api_port=data.get("api_port", AppConfig().api_port),
+        api_port=api_port,
     )
     config.runtime_dir.mkdir(parents=True, exist_ok=True)
     config.output_dir.mkdir(parents=True, exist_ok=True)

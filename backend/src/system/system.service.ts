@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
+import { DongleCheckerService } from './dongle-checker.service';
 
 type ResolvedLicenseState = {
   status: 'licensed' | 'unlicensed' | 'unknown';
@@ -10,9 +11,54 @@ type ResolvedLicenseState = {
   message: string | null;
 };
 
+type LicenseCheckOptions = {
+  persist?: boolean;
+};
+
 @Injectable()
 export class SystemService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly dongleChecker: DongleCheckerService,
+  ) {}
+
+  async checkLicenseStatus(options: LicenseCheckOptions = {}) {
+    const persist = options.persist ?? true;
+    const check = await this.dongleChecker.check();
+    const status = check.ok ? 'licensed' : 'unlicensed';
+    const checkedAt = new Date();
+
+    if (persist) {
+      await this.prisma.licenseLog.create({
+        data: {
+          status,
+          code: check.code,
+          message: check.message,
+        },
+      });
+    }
+
+    return {
+      data: {
+        status,
+        licensed: check.ok,
+        donglePresent: check.ok,
+        lastCheckedAt: checkedAt.toISOString(),
+        code: check.code,
+        message: check.message,
+      },
+    };
+  }
+
+  async assertLoginAllowed() {
+    const response = await this.checkLicenseStatus();
+
+    if (!response.data.licensed || !response.data.donglePresent) {
+      return false;
+    }
+
+    return true;
+  }
 
   async getLicenseStatus() {
     const latestLog = await this.prisma.licenseLog.findFirst({

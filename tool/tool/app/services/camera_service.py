@@ -17,6 +17,7 @@ class CameraService:
         self._lock = threading.Lock()
         self._camera = None
         self._converter = None
+        self._stream_converter = None
         self._last_frame: Optional[CameraFrame] = None
         self._device_index: Optional[int] = None
         self._device_info: Optional[dict] = None
@@ -64,96 +65,50 @@ class CameraService:
         try:
             with self._lock:
                 node_map = self._camera.GetNodeMap()
-                configured = self._read_first_float_node(
+                configured = self._read_first_float_node_with_limits(
                     node_map,
-                    [
-                        "AcquisitionFrameRate",
-                        "AcquisitionFrameRateAbs",
-                        "AcquisitionFrameRateRaw",
-                    ],
+                    self._acquisition_frame_rate_node_names(),
                 )
-                resulting = self._read_first_float_node(
+                resulting = self._read_first_float_node_with_limits(
                     node_map,
-                    [
-                        "ResultingFrameRate",
-                        "ResultingFrameRateAbs",
-                        "ResultingAcquisitionFrameRate",
-                        "BslResultingAcquisitionFrameRate",
-                    ],
+                    self._resulting_frame_rate_node_names(),
                 )
                 if resulting["value"] is None:
-                    resulting = self._read_first_float_node_by_keywords(
+                    resulting = self._read_first_float_node_by_keywords_with_limits(
                         node_map,
                         ["resulting", "frame", "rate"],
                     )
                 if resulting["value"] is None:
-                    resulting = self._read_first_float_node_by_keywords(
+                    resulting = self._read_first_float_node_by_keywords_with_limits(
                         node_map,
                         ["frame", "rate"],
                     )
                 frame_rate_node = self._find_first_node(
                     node_map,
-                    [
-                        "AcquisitionFrameRate",
-                        "AcquisitionFrameRateAbs",
-                        "AcquisitionFrameRateRaw",
-                    ],
+                    self._acquisition_frame_rate_node_names(),
                 )
-                max_fps = self._safe_node_max(frame_rate_node)
                 writable = self._is_node_writable(frame_rate_node)
+                camera_max_fps = self._resolve_camera_max_fps(configured, resulting)
+                camera_resulting_fps = resulting["value"] or camera_max_fps
 
                 return {
                     "connected": True,
                     "requested_stream_fps": requested_fps,
                     "configured_fps": configured["value"],
-                    "camera_resulting_fps": resulting["value"],
-                    "camera_max_fps": max_fps,
-                    "effective_stream_fps": self._clamp_stream_fps(requested_fps, max_fps),
+                    "camera_resulting_fps": camera_resulting_fps,
+                    "camera_max_fps": camera_max_fps,
+                    "effective_stream_fps": camera_resulting_fps,
                     "writable": writable,
                     "error": None,
                     "source": {
                         "configured": configured["name"],
                         "resulting": resulting["name"],
-                        "max": frame_rate_node.GetName() if frame_rate_node is not None else None,
+                        "max": self._resolve_camera_max_source(configured, resulting),
+                        "candidates": self._collect_frame_rate_candidates(node_map),
                     },
                 }
         except Exception as exc:
             return self._default_frame_rate_status(requested_fps, str(exc))
-
-    def configure_frame_rate(self, fps: float) -> dict:
-        with self._lock:
-            self._ensure_connected()
-            node_map = self._camera.GetNodeMap()
-            self._enable_frame_rate_control(node_map)
-            node = self._find_first_node(
-                node_map,
-                [
-                    "AcquisitionFrameRate",
-                    "AcquisitionFrameRateAbs",
-                    "AcquisitionFrameRateRaw",
-                ],
-            )
-
-            if node is None or not self._is_node_writable(node):
-                return self._default_frame_rate_status(
-                    fps,
-                    "Camera frame rate is not writable or not exposed by this camera",
-                )
-
-            max_fps = self._safe_node_max(node)
-            target_fps = self._clamp_stream_fps(fps, max_fps)
-            try:
-                node.SetValue(target_fps)
-            except Exception as exc:
-                return self._default_frame_rate_status(target_fps, str(exc))
-
-        return self.frame_rate_status(target_fps)
-
-    def resolve_stream_fps(self, requested_fps: Optional[float]) -> float:
-        try:
-            return float(self.frame_rate_status(requested_fps)["effective_stream_fps"])
-        except Exception:
-            return self._clamp_stream_fps(requested_fps, None)
 
     def list_devices(self) -> list:
         from pypylon import pylon
@@ -202,6 +157,15 @@ class CameraService:
             self._converter = pylon.ImageFormatConverter()
             self._converter.OutputPixelFormat = pylon.PixelType_RGB8packed
             self._converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
+            self._stream_converter = pylon.ImageFormatConverter()
+            self._stream_converter.OutputPixelFormat = (
+                pylon.PixelType_Mono8
+                if self._is_monochrome_camera()
+                else pylon.PixelType_RGB8packed
+            )
+            self._stream_converter.OutputBitAlignment = (
+                pylon.OutputBitAlignment_MsbAligned
+            )
 
             if any(v is not None for v in [offset_x, offset_y, width, height]):
                 self._set_image_size_unlocked(offset_x, offset_y, width, height)
@@ -220,6 +184,7 @@ class CameraService:
                 self._camera.Close()
             self._camera = None
             self._converter = None
+            self._stream_converter = None
             self._device_index = None
             self._device_info = None
             return self.status()
@@ -276,7 +241,7 @@ class CameraService:
         max_width: Optional[int] = None,
     ) -> tuple:
         total_started_at = time.time()
-        frame = self.grab_frame()
+        frame = self.grab_stream_frame()
         resize_started_at = time.time()
         image = self._resize_for_stream(frame.image, max_width)
         resize_time_ms = (time.time() - resize_started_at) * 1000
@@ -296,6 +261,30 @@ class CameraService:
                 "encoded_bytes": len(content),
             },
         )
+
+    def grab_stream_frame(self) -> CameraFrame:
+        from pypylon import pylon
+
+        with self._lock:
+            self._ensure_connected()
+            if not self._camera.IsGrabbing():
+                self._camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+
+            start = time.time()
+            grab_result = self._camera.RetrieveResult(
+                5000, pylon.TimeoutHandling_ThrowException
+            )
+            try:
+                if not grab_result.GrabSucceeded():
+                    raise RuntimeError("Camera grab failed")
+                image = self._stream_converter.Convert(grab_result).GetArray()
+            finally:
+                grab_result.Release()
+
+            return CameraFrame(
+                image=image,
+                capture_time_ms=(time.time() - start) * 1000,
+            )
 
     def grab_frame(self) -> CameraFrame:
         import cv2
@@ -340,6 +329,14 @@ class CameraService:
         if not self.connected:
             raise RuntimeError("Camera is not connected")
 
+    def _is_monochrome_camera(self) -> bool:
+        model_name = str((self._device_info or {}).get("model_name") or "").lower()
+        if model_name.endswith("m"):
+            return True
+
+        node_map = self._camera.GetNodeMap()
+        return self._safe_get_node(node_map, "PixelColorFilter") is None
+
     def _set_exposure_unlocked(self, exposure: int):
         node_map = self._camera.GetNodeMap()
         if node_map.GetNode("ExposureTimeAbs") is not None:
@@ -368,15 +365,6 @@ class CameraService:
         if offset_y is not None:
             self._camera.OffsetY.SetValue(offset_y)
 
-    def _enable_frame_rate_control(self, node_map):
-        for name in ["AcquisitionFrameRateEnable", "AcquisitionFrameRateEnabled"]:
-            node = self._safe_get_node(node_map, name)
-            if node is not None and self._is_node_writable(node):
-                try:
-                    node.SetValue(True)
-                except Exception:
-                    return
-
     def _default_frame_rate_status(
         self,
         requested_fps: Optional[float] = None,
@@ -388,7 +376,7 @@ class CameraService:
             "configured_fps": None,
             "camera_resulting_fps": None,
             "camera_max_fps": None,
-            "effective_stream_fps": self._clamp_stream_fps(requested_fps, None),
+            "effective_stream_fps": None,
             "writable": False,
             "error": error,
             "source": None,
@@ -419,6 +407,13 @@ class CameraService:
 
         return self._read_float_node(node)
 
+    def _read_first_float_node_with_limits(self, node_map, names: list) -> dict:
+        node = self._find_first_node(node_map, names)
+        if node is None:
+            return self._empty_float_node()
+
+        return self._read_float_node_with_limits(node)
+
     def _read_first_float_node_by_keywords(self, node_map, keywords: list) -> dict:
         try:
             nodes = node_map.GetNodes()
@@ -442,6 +437,29 @@ class CameraService:
 
         return {"name": None, "value": None}
 
+    def _read_first_float_node_by_keywords_with_limits(self, node_map, keywords: list) -> dict:
+        try:
+            nodes = node_map.GetNodes()
+        except Exception:
+            return self._empty_float_node()
+
+        normalized_keywords = [str(keyword).lower() for keyword in keywords]
+        for node in nodes:
+            try:
+                name = node.GetName()
+            except Exception:
+                continue
+
+            normalized_name = name.lower()
+            if not all(keyword in normalized_name for keyword in normalized_keywords):
+                continue
+
+            value = self._read_float_node_with_limits(node)
+            if value["value"] is not None:
+                return value
+
+        return self._empty_float_node()
+
     def _read_float_node(self, node) -> dict:
         try:
             return {"name": node.GetName(), "value": float(node.GetValue())}
@@ -450,6 +468,35 @@ class CameraService:
                 return {"name": node.GetName(), "value": float(node.ToString())}
             except Exception:
                 return {"name": node.GetName(), "value": None}
+
+    def _read_float_node_with_limits(self, node) -> dict:
+        value = self._read_float_node(node)
+        value.update(
+            {
+                "min": self._safe_node_min(node),
+                "max": self._safe_node_max(node),
+                "writable": self._is_node_writable(node),
+            }
+        )
+        return value
+
+    def _empty_float_node(self) -> dict:
+        return {
+            "name": None,
+            "value": None,
+            "min": None,
+            "max": None,
+            "writable": False,
+        }
+
+    def _safe_node_min(self, node) -> Optional[float]:
+        if node is None:
+            return None
+
+        try:
+            return float(node.GetMin())
+        except Exception:
+            return None
 
     def _safe_node_max(self, node) -> Optional[float]:
         if node is None:
@@ -471,18 +518,82 @@ class CameraService:
         except Exception:
             return False
 
-    def _clamp_stream_fps(
-        self,
-        requested_fps: Optional[float],
-        camera_max_fps: Optional[float],
-    ) -> float:
-        fps = 10.0 if requested_fps is None else float(requested_fps)
-        fps = max(1.0, min(20.0, fps))
+    def _resolve_camera_max_fps(self, configured: dict, resulting: dict) -> Optional[float]:
+        # Basler Resulting*FrameRate nodes represent the camera-calculated
+        # achievable frame rate for the current ROI/exposure/transport settings.
+        if resulting["value"] is not None:
+            return resulting["value"]
 
-        if camera_max_fps is not None and camera_max_fps > 0:
-            fps = min(fps, camera_max_fps)
+        if configured.get("max") is not None:
+            return configured["max"]
 
-        return max(1.0, fps)
+        return configured["value"]
+
+    def _resolve_camera_max_source(self, configured: dict, resulting: dict):
+        if resulting["value"] is not None:
+            return resulting["name"]
+
+        if configured.get("max") is not None:
+            return configured["name"]
+
+        return configured["name"]
+
+    def _acquisition_frame_rate_node_names(self) -> list:
+        return [
+            "AcquisitionFrameRate",
+            "AcquisitionFrameRateAbs",
+            "AcquisitionFrameRateRaw",
+            "BslAcquisitionFrameRate",
+        ]
+
+    def _resulting_frame_rate_node_names(self) -> list:
+        return [
+            "ResultingFrameRate",
+            "ResultingFrameRateAbs",
+            "ResultingAcquisitionFrameRate",
+            "ResultingAcquisitionFrameRateAbs",
+            "AcquisitionResultingFrameRate",
+            "AcquisitionResultingFrameRateAbs",
+            "BslResultingFrameRate",
+            "BslResultingAcquisitionFrameRate",
+            "BslResultingAcquisitionFrameRateAbs",
+        ]
+
+    def _collect_frame_rate_candidates(self, node_map) -> list:
+        try:
+            nodes = node_map.GetNodes()
+        except Exception:
+            return []
+
+        candidates = []
+        preferred_names = set(
+            self._acquisition_frame_rate_node_names()
+            + self._resulting_frame_rate_node_names()
+        )
+
+        for node in nodes:
+            try:
+                name = node.GetName()
+            except Exception:
+                continue
+
+            normalized_name = name.lower()
+            if name not in preferred_names and not (
+                "frame" in normalized_name and "rate" in normalized_name
+            ):
+                continue
+
+            value = self._read_float_node_with_limits(node)
+            if (
+                value["value"] is None
+                and value["min"] is None
+                and value["max"] is None
+            ):
+                continue
+
+            candidates.append(value)
+
+        return candidates[:30]
 
     def _safe_device_value(self, device, method_name: str):
         try:

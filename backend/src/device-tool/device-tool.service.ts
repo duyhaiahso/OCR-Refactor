@@ -77,10 +77,10 @@ type DeviceToolCameraFrameRateResponse = {
     configured_fps?: number | null;
     camera_resulting_fps?: number | null;
     camera_max_fps?: number | null;
-    effective_stream_fps: number;
+    effective_stream_fps?: number | null;
     writable: boolean;
     error?: string | null;
-    source?: Record<string, string | null> | null;
+    source?: Record<string, unknown> | null;
   };
 };
 
@@ -291,17 +291,6 @@ export class DeviceToolService {
     }
   }
 
-  async updateCameraFrameRate(fps: number) {
-    return this.requestJson<DeviceToolCameraFrameRateResponse>(
-      '/api/v1/camera/frame-rate',
-      {
-        method: 'PATCH',
-        body: JSON.stringify({ fps }),
-      },
-      'update camera frame rate',
-    );
-  }
-
   async inspectProduct(request: DeviceToolInspectionRequest) {
     await this.ensureCameraReady(request.camera);
 
@@ -376,7 +365,7 @@ export class DeviceToolService {
         configured_fps: null,
         camera_resulting_fps: null,
         camera_max_fps: null,
-        effective_stream_fps: 10,
+        effective_stream_fps: null,
         writable: false,
         error: null,
         source: null,

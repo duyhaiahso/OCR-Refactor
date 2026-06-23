@@ -67,27 +67,45 @@ async function seed() {
 
   const passwordHash = await bcrypt.hash('admin123', 12);
 
-  await prisma.user.upsert({
-    where: { username: 'dev' },
-    update: { passwordHash, roleCode: RoleCode.dev, active: true },
-    create: {
+  for (const user of [
+    {
       username: 'dev',
-      passwordHash,
       fullName: 'Developer',
       roleCode: RoleCode.dev,
     },
-  });
-
-  await prisma.user.upsert({
-    where: { username: 'admin' },
-    update: { passwordHash, roleCode: RoleCode.admin, active: true },
-    create: {
+    {
       username: 'admin',
-      passwordHash,
       fullName: 'Administrator',
       roleCode: RoleCode.admin,
     },
-  });
+    {
+      username: 'engineer',
+      fullName: 'Engineer',
+      roleCode: RoleCode.engineer,
+    },
+    {
+      username: 'operator',
+      fullName: 'Operator',
+      roleCode: RoleCode.operator,
+    },
+  ]) {
+    await prisma.user.upsert({
+      where: { username: user.username },
+      update: {
+        passwordHash,
+        fullName: user.fullName,
+        roleCode: user.roleCode,
+        active: true,
+        failedAttempts: 0,
+      },
+      create: {
+        ...user,
+        passwordHash,
+        active: true,
+        failedAttempts: 0,
+      },
+    });
+  }
 }
 
 seed()
@@ -99,4 +117,3 @@ seed()
     await prisma.$disconnect();
     process.exit(1);
   });
-
