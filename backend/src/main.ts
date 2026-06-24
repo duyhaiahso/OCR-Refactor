@@ -7,6 +7,19 @@ import { CameraStreamGateway } from './camera/camera-stream.gateway';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  const configuredCorsOrigins = (
+    process.env.FRONTEND_ORIGIN ?? 'http://localhost:3000,http://127.0.0.1:3000'
+  )
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  const localRendererOrigins = Array.from(
+    { length: 100 },
+    (_, index) => index + 3000,
+  ).flatMap((port) => [`http://localhost:${port}`, `http://127.0.0.1:${port}`]);
+  const corsOrigins = Array.from(
+    new Set([...configuredCorsOrigins, ...localRendererOrigins]),
+  );
   app.setGlobalPrefix('api');
   app.useGlobalPipes(
     new ValidationPipe({
@@ -16,7 +29,7 @@ async function bootstrap() {
     }),
   );
   app.enableCors({
-    origin: process.env.FRONTEND_ORIGIN ?? 'http://localhost:3000',
+    origin: corsOrigins,
   });
 
   const swaggerConfig = new DocumentBuilder()

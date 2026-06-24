@@ -6,10 +6,12 @@
   "workspaces": [
     "frontend",
     "backend",
+    "electron",
     "shared"
   ],
   "scripts": {
     "dev": "npm run dev --workspaces --if-present",
+    "dev:desktop": "npm run dev -w @ocr/electron",
     "dev:frontend:safe": "powershell -ExecutionPolicy Bypass -File ./scripts/start-frontend-safe.ps1",
     "build": "npm run build --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",

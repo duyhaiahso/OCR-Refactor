@@ -8,7 +8,6 @@ import {
   ApiError,
   getApiHealth,
   getCurrentInspection,
-  getSystemLicense,
   listProductProfiles,
   type CurrentInspectionState,
   type HealthResponse,
@@ -16,10 +15,10 @@ import {
 } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { getAccessToken } from "@/lib/session";
+import { useLicenseWatchdog } from "@/lib/use-license-watchdog";
 
 type DashboardSnapshot = {
   apiHealth: HealthResponse["data"] | null;
-  license: SystemLicenseState | null;
   inspection: CurrentInspectionState | null;
   productCount: number;
   activeProductCount: number;
@@ -27,7 +26,6 @@ type DashboardSnapshot = {
 
 const initialSnapshot: DashboardSnapshot = {
   apiHealth: null,
-  license: null,
   inspection: null,
   productCount: 0,
   activeProductCount: 0,
@@ -38,6 +36,11 @@ export function DashboardStatusPanel() {
   const [snapshot, setSnapshot] = useState<DashboardSnapshot>(initialSnapshot);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const {
+    checking: licenseChecking,
+    error: licenseError,
+    license,
+  } = useLicenseWatchdog();
 
   useEffect(() => {
     let cancelled = false;
@@ -61,20 +64,6 @@ export function DashboardStatusPanel() {
             listProductProfiles(accessToken),
           ]);
 
-        let license: SystemLicenseState | null = null;
-
-        try {
-          const licenseResponse = await getSystemLicense(accessToken);
-          license = licenseResponse.data;
-        } catch (cause) {
-          if (
-            !(cause instanceof ApiError) ||
-            ![403, 404].includes(cause.status)
-          ) {
-            throw cause;
-          }
-        }
-
         if (cancelled) {
           return;
         }
@@ -82,7 +71,6 @@ export function DashboardStatusPanel() {
         const products = productsResponse.data;
         setSnapshot({
           apiHealth: healthResponse.data,
-          license,
           inspection: inspectionResponse.data,
           productCount: products.length,
           activeProductCount: products.filter((product) => product.active).length,
@@ -112,10 +100,14 @@ export function DashboardStatusPanel() {
   }, [apiError, t]);
 
   const inspection = snapshot.inspection;
-  const license = snapshot.license;
   const latestResult = inspection?.lastResult?.result ?? "UNKNOWN";
   const inspectionStatus = inspection?.status ?? "idle";
   const latestResultLabel = formatResultLabel(latestResult, t);
+  const licenseDetail = licenseError
+    ? licenseError
+    : licenseChecking && !license
+      ? t("auth.checking")
+      : formatLicenseDetail(license, t);
 
   return (
     <div className="space-y-5">
@@ -134,7 +126,7 @@ export function DashboardStatusPanel() {
           label={t("dashboard.license")}
           value={formatLicenseLabel(license, t)}
           tone={formatLicenseTone(license)}
-          detail={formatLicenseDetail(license, t)}
+          detail={licenseDetail}
         />
         <StatusCard
           label={t("dashboard.inspection")}
@@ -190,7 +182,7 @@ export function DashboardStatusPanel() {
                 {error}
               </div>
             ) : (
-              <div className="grid gap-4 lg:grid-cols-2">
+              <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
                 <DetailBlock
                   title={t("dashboard.lineStatus")}
                   rows={[
@@ -212,6 +204,25 @@ export function DashboardStatusPanel() {
                     [t("operator.count"), String(inspection?.count ?? 0)],
                     [t("operator.batch"), String(inspection?.batch ?? 0)],
                     [t("operator.packSize"), String(inspection?.batchSize ?? 0)],
+                  ]}
+                />
+                <DetailBlock
+                  title={t("dashboard.realtimeCheck")}
+                  rows={[
+                    [t("dashboard.license"), formatLicenseLabel(license, t)],
+                    [
+                      t("dashboard.dongleStatus"),
+                      license?.donglePresent === true
+                        ? t("dashboard.donglePresent")
+                        : license?.donglePresent === false
+                          ? t("dashboard.dongleMissing")
+                          : t("dashboard.pending"),
+                    ],
+                    [t("dashboard.licenseCode"), license?.code ?? t("dashboard.noData")],
+                    [
+                      t("dashboard.licenseMessage"),
+                      license?.message ?? t("dashboard.noData"),
+                    ],
                   ]}
                 />
               </div>

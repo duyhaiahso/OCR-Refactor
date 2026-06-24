@@ -22,7 +22,8 @@ export type CameraViewTransform = {
 
 export type CameraLiveStats = {
   fps: number;
-  targetFps: number | null;
+  cameraFps: number | null;
+  cameraMaxFps: number | null;
   delayMs: number | null;
   captureTimeMs: number | null;
 };
@@ -240,9 +241,9 @@ export function CameraImageViewer({
         <div className="absolute left-3 top-14 border border-white/10 bg-black/75 px-3 py-2 text-xs text-white">
           <div className="font-semibold">
             {t("camera.liveFps")}: {liveStats.fps.toFixed(1)}
-            {liveStats.targetFps === null
+            {liveStats.cameraFps === null
               ? ""
-              : ` / ${liveStats.targetFps.toFixed(1)}`}
+              : ` / ${liveStats.cameraFps.toFixed(1)}`}
           </div>
           <div className="mt-1 text-white/80">
             {t("camera.liveDelay")}:{" "}
@@ -275,7 +276,12 @@ export function CameraImageViewer({
             {t("products.zoomFactor")}: {zoom.toFixed(2)}x - {rotation} deg
           </div>
           <div className="absolute bottom-3 left-3 right-3 flex items-end justify-between gap-3">
-            <div className="grid grid-cols-3 gap-1">
+            <div
+              className="grid grid-cols-3 gap-1"
+              onPointerDown={(event) => event.stopPropagation()}
+              onPointerMove={(event) => event.stopPropagation()}
+              onPointerUp={(event) => event.stopPropagation()}
+            >
               <span />
               <ViewerButton
                 label={t("camera.moveUp")}
@@ -309,7 +315,12 @@ export function CameraImageViewer({
                 <ArrowDown className="h-4 w-4" />
               </ViewerButton>
             </div>
-            <div className="flex flex-wrap items-center justify-end gap-2">
+            <div
+              className="flex flex-wrap items-center justify-end gap-2"
+              onPointerDown={(event) => event.stopPropagation()}
+              onPointerMove={(event) => event.stopPropagation()}
+              onPointerUp={(event) => event.stopPropagation()}
+            >
               <ViewerButton
                 label={t("camera.zoomOut")}
                 onClick={() => updateZoom(zoom - zoomStep)}
@@ -344,7 +355,15 @@ export function CameraImageViewer({
                 <RotateCw className="h-4 w-4" />
               </ViewerButton>
             </div>
-            {footerAction}
+            {footerAction ? (
+              <div
+                onPointerDown={(event) => event.stopPropagation()}
+                onPointerMove={(event) => event.stopPropagation()}
+                onPointerUp={(event) => event.stopPropagation()}
+              >
+                {footerAction}
+              </div>
+            ) : null}
           </div>
         </>
       ) : null}
@@ -372,7 +391,13 @@ function ViewerButton({
       aria-label={label}
       title={label}
       disabled={disabled}
-      onClick={onClick}
+      onPointerDown={(event) => event.stopPropagation()}
+      onPointerMove={(event) => event.stopPropagation()}
+      onPointerUp={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick();
+      }}
     >
       {children}
     </Button>

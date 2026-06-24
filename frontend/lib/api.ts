@@ -113,10 +113,10 @@ export type CameraFrameRate = {
     configured_fps?: number | null;
     camera_resulting_fps?: number | null;
     camera_max_fps?: number | null;
-    effective_stream_fps: number;
+    effective_stream_fps?: number | null;
     writable: boolean;
     error?: string | null;
-    source?: Record<string, string | null> | null;
+    source?: Record<string, unknown> | null;
   };
 };
 
@@ -236,7 +236,7 @@ export type ApplyProductProfilePayload = {
 };
 
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:4000/api";
+  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:4000/api";
 
 type ApiErrorBody = {
   error?: {
@@ -345,6 +345,16 @@ export async function getSystemLicense(accessToken: string) {
   return (await response.json()) as { data: SystemLicenseState };
 }
 
+export async function getPublicSystemLicense() {
+  const response = await fetch(`${API_BASE_URL}/system/license/public`);
+
+  if (!response.ok) {
+    throw new ApiError(await parseError(response), response.status);
+  }
+
+  return (await response.json()) as { data: SystemLicenseState };
+}
+
 export async function getCameraStatus(accessToken: string) {
   const response = await fetch(`${API_BASE_URL}/camera/status`, {
     headers: {
@@ -378,23 +388,6 @@ export async function getCameraFrameRate(accessToken: string) {
     headers: {
       Authorization: `Bearer ${accessToken}`,
     },
-  });
-
-  if (!response.ok) {
-    throw new ApiError(await parseError(response), response.status);
-  }
-
-  return (await response.json()) as CameraFrameRate;
-}
-
-export async function updateCameraFrameRate(accessToken: string, fps: number) {
-  const response = await fetch(`${API_BASE_URL}/camera/frame-rate`, {
-    method: "PATCH",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ fps }),
   });
 
   if (!response.ok) {
@@ -443,12 +436,19 @@ export async function grabCameraFrame(accessToken: string) {
 
 export function getCameraStreamUrl(
   accessToken: string,
-  options: { fps?: number; jpegQuality?: number; maxWidth?: number } = {},
+  options: {
+    debugTiming?: boolean;
+    fps?: number;
+    jpegQuality?: number;
+    maxWidth?: number;
+  } = {},
 ) {
   const url = new URL(`${API_BASE_URL}/camera/stream`);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.searchParams.set("token", accessToken);
-  url.searchParams.set("fps", String(options.fps ?? DEFAULT_CAMERA_STREAM_FPS));
+  if (typeof options.fps === "number") {
+    url.searchParams.set("fps", String(options.fps));
+  }
   url.searchParams.set(
     "jpegQuality",
     String(options.jpegQuality ?? DEFAULT_CAMERA_STREAM_JPEG_QUALITY),
@@ -457,10 +457,12 @@ export function getCameraStreamUrl(
     "maxWidth",
     String(options.maxWidth ?? DEFAULT_CAMERA_STREAM_MAX_WIDTH),
   );
+  if (options.debugTiming) {
+    url.searchParams.set("debugTiming", "1");
+  }
   return url.toString();
 }
 
-export const DEFAULT_CAMERA_STREAM_FPS = 10;
 export const DEFAULT_CAMERA_STREAM_JPEG_QUALITY = 70;
 export const DEFAULT_CAMERA_STREAM_MAX_WIDTH = 1600;
 

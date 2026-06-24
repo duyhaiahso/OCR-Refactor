@@ -7,7 +7,6 @@ from fastapi import APIRouter, HTTPException, Response, WebSocket, WebSocketDisc
 from tool.app.schemas.camera import (
     CameraConnectRequest,
     CameraDevice,
-    CameraFrameRateRequest,
     CameraSettingsRequest,
     GrabImageRequest,
     GrabImageResponse,
@@ -61,14 +60,6 @@ def frame_rate():
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.patch("/frame-rate", response_model=SuccessResponse)
-def update_frame_rate(payload: CameraFrameRateRequest):
-    try:
-        return SuccessResponse(data=camera_service.configure_frame_rate(payload.fps))
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
 @router.post("/grab", response_model=GrabImageResponse)
 def grab_image(payload: GrabImageRequest):
     try:
@@ -94,19 +85,19 @@ def grab_raw_image(payload: GrabImageRequest):
 @router.websocket("/stream")
 async def stream_camera(websocket: WebSocket):
     await websocket.accept()
-    requested_fps = _clamp_float(websocket.query_params.get("fps"), 1.0, 20.0, 10.0)
-    fps = camera_service.resolve_stream_fps(requested_fps)
     jpeg_quality = int(
         _clamp_float(websocket.query_params.get("jpeg_quality"), 1.0, 100.0, 70.0)
     )
     max_width = int(
         _clamp_float(websocket.query_params.get("max_width"), 320.0, 4096.0, 1600.0)
     )
-    frame_delay = 1.0 / fps
+    debug_timing = websocket.query_params.get("debug_timing") == "1"
 
     try:
-        next_frame_at = time.monotonic()
         frame_id = 0
+        tool_frame_times = []
+        frame_rate = camera_service.frame_rate_status()
+        frame_rate_checked_at = time.monotonic()
         while True:
             frame_id += 1
             frame_started_at = time.monotonic()
@@ -116,6 +107,9 @@ async def stream_camera(websocket: WebSocket):
                 jpeg_quality,
                 max_width,
             )
+            if time.monotonic() - frame_rate_checked_at >= 1:
+                frame_rate = camera_service.frame_rate_status()
+                frame_rate_checked_at = time.monotonic()
             before_send_at = time.time()
             await websocket.send_json(
                 {
@@ -123,29 +117,36 @@ async def stream_camera(websocket: WebSocket):
                     "frame_id": frame_id,
                     **timing,
                     "sent_at_ms": time.time() * 1000,
-                    "stream_fps": fps,
-                    "requested_fps": requested_fps,
+                    "stream_fps": frame_rate.get("camera_resulting_fps"),
+                    "requested_fps": None,
+                    "camera_resulting_fps": frame_rate.get("camera_resulting_fps"),
+                    "camera_max_fps": frame_rate.get("camera_max_fps"),
+                    "camera_configured_fps": frame_rate.get("configured_fps"),
                     "jpeg_quality": jpeg_quality,
                     "max_width": max_width,
                 }
             )
             await websocket.send_bytes(content)
-            send_time_ms = (time.time() - before_send_at) * 1000
-            frame_loop_ms = (time.monotonic() - frame_started_at) * 1000
-            await websocket.send_json(
-                {
-                    "type": "frame_done",
-                    "frame_id": frame_id,
-                    "send_time_ms": send_time_ms,
-                    "frame_loop_time_ms": frame_loop_ms,
-                }
-            )
-            next_frame_at = max(next_frame_at + frame_delay, frame_started_at)
-            sleep_seconds = next_frame_at - time.monotonic()
-            if sleep_seconds > 0:
-                await asyncio.sleep(sleep_seconds)
-            else:
-                next_frame_at = time.monotonic()
+            if debug_timing:
+                send_time_ms = (time.time() - before_send_at) * 1000
+                frame_loop_ms = (time.monotonic() - frame_started_at) * 1000
+                frame_completed_at = time.monotonic()
+                tool_frame_times = [
+                    timestamp
+                    for timestamp in tool_frame_times
+                    if frame_completed_at - timestamp <= 1
+                ]
+                tool_frame_times.append(frame_completed_at)
+                await websocket.send_json(
+                    {
+                        "type": "frame_done",
+                        "frame_id": frame_id,
+                        "send_time_ms": send_time_ms,
+                        "frame_loop_time_ms": frame_loop_ms,
+                        "tool_fps": len(tool_frame_times),
+                    }
+                )
+            await asyncio.sleep(0)
     except WebSocketDisconnect:
         return
     except Exception as exc:
@@ -156,7 +157,7 @@ async def stream_camera(websocket: WebSocket):
 def _clamp_float(
     value: Optional[str],
     min_value: float,
-    max_value: float,
+    max_value: Optional[float],
     default: float,
 ):
     if value is None:
@@ -167,4 +168,9 @@ def _clamp_float(
     except ValueError:
         return default
 
-    return min(max(parsed, min_value), max_value)
+    parsed = max(parsed, min_value)
+
+    if max_value is not None:
+        parsed = min(parsed, max_value)
+
+    return parsed

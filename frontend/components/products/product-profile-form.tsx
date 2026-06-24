@@ -37,7 +37,10 @@ import {
   ProductProfilePayload,
   RoiRegion,
 } from "@/lib/api";
-import { CameraPreviewImage } from "@/components/camera/camera-preview-image";
+import {
+  CameraPreviewTransformLayer,
+  clientPointToCameraPoint,
+} from "@/components/camera/camera-preview-image";
 import { useConnectedCameraPreview } from "@/components/camera/use-connected-camera-preview";
 import { useI18n } from "@/lib/i18n";
 import { getAccessToken } from "@/lib/session";
@@ -151,34 +154,31 @@ function cameraDeviceValue(device: CameraDevice) {
 function regionFromClientPoint(
   point: Point,
   element: HTMLDivElement | null,
+  camera: ProductProfilePayload["camera"],
 ) {
-  const rect = element?.getBoundingClientRect();
-
-  if (!rect) {
-    return null;
-  }
-
-  return {
-    x: clamp(
-      Math.round(((point.x - rect.left) / rect.width) * cameraWidth),
-      0,
-      cameraWidth,
-    ),
-    y: clamp(
-      Math.round(((point.y - rect.top) / rect.height) * cameraHeight),
-      0,
-      cameraHeight,
-    ),
-  };
+  return clientPointToCameraPoint({
+    clientPoint: point,
+    container: element,
+    imageSize: {
+      width: camera.imageWidth || cameraWidth,
+      height: camera.imageHeight || cameraHeight,
+    },
+    previewPanX: camera.previewPanX,
+    previewPanY: camera.previewPanY,
+    previewRotation: camera.previewRotation,
+    zoomFactor: camera.zoomFactor,
+  });
 }
 
 function regionFromPointer(
   event: PointerEvent<HTMLElement>,
   element: HTMLDivElement | null,
+  camera: ProductProfilePayload["camera"],
 ) {
   return regionFromClientPoint(
     { x: event.clientX, y: event.clientY },
     element,
+    camera,
   );
 }
 
@@ -1031,7 +1031,11 @@ export function ProductProfileForm({
   }
 
   function handlePreviewPointerMove(event: PointerEvent<HTMLDivElement>) {
-    const nextPosition = regionFromPointer(event, previewRef.current);
+    const nextPosition = regionFromPointer(
+      event,
+      previewRef.current,
+      draft.camera,
+    );
 
     if (!nextPosition) {
       return;
@@ -1199,7 +1203,7 @@ export function ProductProfileForm({
       return;
     }
 
-    const start = regionFromPointer(event, previewRef.current);
+    const start = regionFromPointer(event, previewRef.current, draft.camera);
 
     if (!start) {
       return;
@@ -1235,7 +1239,11 @@ export function ProductProfileForm({
   ) {
     event.preventDefault();
     event.stopPropagation();
-    const pointerPosition = regionFromPointer(event, previewRef.current);
+    const pointerPosition = regionFromPointer(
+      event,
+      previewRef.current,
+      draft.camera,
+    );
     const region = draft.roiRegions.find((item) => item.index === index);
 
     if (!pointerPosition || !region) {

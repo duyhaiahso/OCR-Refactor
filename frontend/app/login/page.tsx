@@ -2,6 +2,11 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import {
+  LoginSystemStatus,
+  type LoginGateStatus,
+} from "@/components/auth/login-system-status";
 import { LanguageToggle } from "@/components/language-toggle";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -22,6 +27,11 @@ export default function LoginPage() {
   const [password, setPassword] = useState("admin123");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [gateStatus, setGateStatus] = useState<LoginGateStatus>({
+    checking: true,
+    apiConnected: false,
+    licenseReady: false,
+  });
 
   useEffect(() => {
     const token = getAccessToken();
@@ -43,17 +53,33 @@ export default function LoginPage() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
+
+    if (!gateStatus.licenseReady) {
+      const message = t("login.blocked");
+      setError(message);
+      toast.error(message);
+      return;
+    }
+
     setLoading(true);
 
     try {
       const response = await login(username, password);
       saveSession(response.data.accessToken, response.data.user);
+      toast.success(t("auth.loginSuccess"));
       router.replace("/dashboard");
     } catch (cause) {
+      const message =
+        cause instanceof ApiError
+          ? apiError(cause.message, "auth.connectionError")
+          : t("auth.connectionError");
+
+      toast.error(message);
+
       if (cause instanceof ApiError) {
-        setError(apiError(cause.message, "auth.connectionError"));
+        setError(message);
       } else {
-        setError(t("auth.connectionError"));
+        setError(message);
       }
     } finally {
       setLoading(false);
@@ -120,6 +146,8 @@ export default function LoginPage() {
                 />
               </label>
 
+              <LoginSystemStatus onChange={setGateStatus} />
+
               {error ? (
                 <div className="mt-5 border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
                   {error}
@@ -127,7 +155,7 @@ export default function LoginPage() {
               ) : null}
 
               <Button
-                disabled={loading}
+                disabled={loading || gateStatus.checking || !gateStatus.licenseReady}
                 className="mt-7 w-full"
               >
                 {loading ? t("auth.signingIn") : t("auth.login")}

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequireAnyPermission } from '../auth/permissions.decorator';
@@ -7,7 +7,6 @@ import { PERMISSIONS } from '../common/constants/permissions';
 import { DeviceToolService } from '../device-tool/device-tool.service';
 import { CameraProfileDto } from '../products/dto/product-profile.dto';
 import { GrabCameraFrameDto } from './dto/grab-camera-frame.dto';
-import { UpdateCameraFrameRateDto } from './dto/update-camera-frame-rate.dto';
 
 @ApiTags('camera')
 @ApiBearerAuth()
@@ -37,13 +36,6 @@ export class CameraController {
   @RequireAnyPermission(PERMISSIONS.CAMERA_MANAGE, PERMISSIONS.INSPECTION_START)
   getFrameRate() {
     return this.deviceToolService.getCameraFrameRate();
-  }
-
-  @ApiOperation({ summary: 'Update camera acquisition frame rate' })
-  @Patch('frame-rate')
-  @RequireAnyPermission(PERMISSIONS.CAMERA_MANAGE)
-  updateFrameRate(@Body() dto: UpdateCameraFrameRateDto) {
-    return this.deviceToolService.updateCameraFrameRate(dto.fps);
   }
 
   @ApiOperation({ summary: 'Connect camera using a product camera profile' })

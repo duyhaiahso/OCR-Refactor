@@ -8,12 +8,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  DEFAULT_CAMERA_STREAM_FPS,
   DEFAULT_CAMERA_STREAM_JPEG_QUALITY,
   DEFAULT_CAMERA_STREAM_MAX_WIDTH,
   getCameraStreamUrl,
 } from "@/lib/api";
-import { useI18n } from "@/lib/i18n";
+import { useI18n, type TranslationKey } from "@/lib/i18n";
 import { getAccessToken } from "@/lib/session";
 
 const MAX_DEBUG_ROWS = 60;
@@ -28,6 +27,10 @@ type StreamFrameMeta = {
   sent_at_ms?: number | null;
   stream_fps?: number | null;
   requested_fps?: number | null;
+  camera_resulting_fps?: number | null;
+  camera_max_fps?: number | null;
+  backend_meta_received_at_ms?: number | null;
+  backend_meta_sent_at_ms?: number | null;
   frame_width?: number | null;
   frame_height?: number | null;
   encoded_bytes?: number | null;
@@ -38,6 +41,14 @@ type StreamFrameDone = {
   frame_id?: number | null;
   send_time_ms?: number | null;
   frame_loop_time_ms?: number | null;
+  tool_fps?: number | null;
+};
+
+type StreamBackendFrameDone = {
+  type: "backend_frame_done";
+  frame_id?: number | null;
+  backend_binary_received_at_ms?: number | null;
+  backend_binary_sent_at_ms?: number | null;
 };
 
 type StreamErrorMessage = {
@@ -45,16 +56,22 @@ type StreamErrorMessage = {
 };
 
 type DebugFrameRow = {
+  rowKey: number;
+  runId: number;
   id: number;
   receivedAt: string;
   actualFps: number;
   targetFps: number | null;
+  toolFps: number | null;
+  backendFps: number | null;
   totalMs: number | null;
   grabMs: number | null;
   resizeMs: number | null;
   encodeMs: number | null;
   sendMs: number | null;
   loopMs: number | null;
+  toolToBackendMs: number | null;
+  backendToFeMs: number | null;
   delayMs: number | null;
   size: string;
   bytes: number | null;
@@ -66,11 +83,16 @@ export function CameraDebugPanel() {
   const [rows, setRows] = useState<DebugFrameRow[]>([]);
   const [frameCount, setFrameCount] = useState(0);
   const [actualFps, setActualFps] = useState(0);
+  const [backendFps, setBackendFps] = useState(0);
+  const [toolFps, setToolFps] = useState<number | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const metaRef = useRef<StreamFrameMeta | null>(null);
   const frameTimesRef = useRef<number[]>([]);
+  const backendFrameTimesRef = useRef<number[]>([]);
   const frameIdRef = useRef(0);
   const frameCountRef = useRef(0);
+  const rowKeyRef = useRef(0);
+  const runIdRef = useRef(0);
 
   const latestRow = rows[0] ?? null;
 
@@ -95,10 +117,11 @@ export function CameraDebugPanel() {
 
     closeSocket({ silent: true });
     resetRuntimeCounters();
+    runIdRef.current += 1;
 
     const socket = new WebSocket(
       getCameraStreamUrl(accessToken, {
-        fps: DEFAULT_CAMERA_STREAM_FPS,
+        debugTiming: true,
         jpegQuality: DEFAULT_CAMERA_STREAM_JPEG_QUALITY,
         maxWidth: DEFAULT_CAMERA_STREAM_MAX_WIDTH,
       }),
@@ -160,10 +183,13 @@ export function CameraDebugPanel() {
   function resetRuntimeCounters() {
     metaRef.current = null;
     frameTimesRef.current = [];
+    backendFrameTimesRef.current = [];
     frameIdRef.current = 0;
     frameCountRef.current = 0;
     setFrameCount(0);
     setActualFps(0);
+    setBackendFps(0);
+    setToolFps(null);
   }
 
   function handleStreamMessage(message: string) {
@@ -171,6 +197,7 @@ export function CameraDebugPanel() {
       const payload = JSON.parse(message) as
         | StreamFrameMeta
         | StreamFrameDone
+        | StreamBackendFrameDone
         | StreamErrorMessage;
 
       if ("type" in payload && payload.type === "frame_meta") {
@@ -180,6 +207,11 @@ export function CameraDebugPanel() {
 
       if ("type" in payload && payload.type === "frame_done") {
         updateFrameCompletion(payload);
+        return;
+      }
+
+      if ("type" in payload && payload.type === "backend_frame_done") {
+        updateBackendCompletion(payload);
         return;
       }
 
@@ -199,17 +231,27 @@ export function CameraDebugPanel() {
     const meta = metaRef.current;
     const nextActualFps = frameTimes.length;
     const nextFrameCount = frameCountRef.current + 1;
+    rowKeyRef.current += 1;
     const nextRow: DebugFrameRow = {
+      rowKey: rowKeyRef.current,
+      runId: runIdRef.current,
       id: meta?.frame_id ?? frameIdRef.current + 1,
       receivedAt: new Date(now).toLocaleTimeString(),
       actualFps: nextActualFps,
-      targetFps: meta?.stream_fps ?? meta?.requested_fps ?? null,
+      targetFps: meta?.camera_resulting_fps ?? meta?.stream_fps ?? null,
+      toolFps: null,
+      backendFps: null,
       totalMs: meta?.tool_total_time_ms ?? null,
       grabMs: meta?.capture_time_ms ?? null,
       resizeMs: meta?.resize_time_ms ?? null,
       encodeMs: meta?.encode_time_ms ?? null,
       sendMs: null,
       loopMs: null,
+      toolToBackendMs:
+        meta?.backend_meta_received_at_ms && meta?.sent_at_ms
+          ? meta.backend_meta_received_at_ms - meta.sent_at_ms
+          : null,
+      backendToFeMs: null,
       delayMs: meta?.sent_at_ms ? now - meta.sent_at_ms : null,
       size:
         meta?.frame_width && meta?.frame_height
@@ -228,6 +270,46 @@ export function CameraDebugPanel() {
 
   function updateFrameCompletion(payload: StreamFrameDone) {
     const frameId = payload.frame_id;
+    const nextToolFps =
+      typeof payload.tool_fps === "number"
+        ? payload.tool_fps
+        : typeof payload.frame_loop_time_ms === "number" &&
+            payload.frame_loop_time_ms > 0
+          ? 1000 / payload.frame_loop_time_ms
+          : null;
+
+    if (!frameId) {
+      return;
+    }
+
+    if (nextToolFps !== null) {
+      setToolFps(nextToolFps);
+    }
+
+    setRows((current) =>
+      current.map((row) =>
+        row.runId === runIdRef.current && row.id === frameId
+          ? {
+              ...row,
+              sendMs: payload.send_time_ms ?? row.sendMs,
+              loopMs: payload.frame_loop_time_ms ?? row.loopMs,
+              toolFps: nextToolFps ?? row.toolFps,
+            }
+          : row,
+      ),
+    );
+  }
+
+  function updateBackendCompletion(payload: StreamBackendFrameDone) {
+    const frameId = payload.frame_id;
+    const now = Date.now();
+    const nextBackendTimes = backendFrameTimesRef.current
+      .filter((timestamp) => now - timestamp <= 1000)
+      .concat(now);
+    const nextBackendFps = nextBackendTimes.length;
+
+    backendFrameTimesRef.current = nextBackendTimes;
+    setBackendFps(nextBackendFps);
 
     if (!frameId) {
       return;
@@ -235,16 +317,27 @@ export function CameraDebugPanel() {
 
     setRows((current) =>
       current.map((row) =>
-        row.id === frameId
+        row.runId === runIdRef.current && row.id === frameId
           ? {
               ...row,
-              sendMs: payload.send_time_ms ?? row.sendMs,
-              loopMs: payload.frame_loop_time_ms ?? row.loopMs,
+              backendFps: nextBackendFps,
+              backendToFeMs:
+                typeof payload.backend_binary_sent_at_ms === "number"
+                  ? now - payload.backend_binary_sent_at_ms
+                  : row.backendToFeMs,
             }
           : row,
       ),
     );
   }
+
+  const bottleneck = resolveBottleneck({
+    backendFps,
+    cameraFps: latestRow?.targetFps ?? null,
+    feFps: actualFps,
+    toolFps,
+    t,
+  });
 
   return (
     <div className="space-y-4">
@@ -317,6 +410,21 @@ export function CameraDebugPanel() {
           icon={<Timer className="h-4 w-4" />}
         />
         <MetricCard
+          label={t("cameraDebug.toolFps")}
+          value={formatFpsValue(toolFps)}
+          icon={<Activity className="h-4 w-4" />}
+        />
+        <MetricCard
+          label={t("cameraDebug.backendFps")}
+          value={`${backendFps} FPS`}
+          icon={<Activity className="h-4 w-4" />}
+        />
+        <MetricCard
+          label={t("cameraDebug.dropPoint")}
+          value={bottleneck}
+          icon={<Activity className="h-4 w-4" />}
+        />
+        <MetricCard
           label={t("cameraDebug.total")}
           value={formatMs(latestRow?.totalMs)}
           icon={<Timer className="h-4 w-4" />}
@@ -364,7 +472,7 @@ export function CameraDebugPanel() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="min-w-[1080px] text-left text-sm">
+              <table className="min-w-[1380px] text-left text-sm">
                 <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase text-slate-500">
                   <tr>
                     <th className="px-3 py-3 font-semibold">#</th>
@@ -374,6 +482,12 @@ export function CameraDebugPanel() {
                     </th>
                     <th className="px-3 py-3 font-semibold">
                       {t("cameraDebug.targetFps")}
+                    </th>
+                    <th className="px-3 py-3 font-semibold">
+                      {t("cameraDebug.toolFps")}
+                    </th>
+                    <th className="px-3 py-3 font-semibold">
+                      {t("cameraDebug.backendFps")}
                     </th>
                     <th className="px-3 py-3 font-semibold">
                       {t("cameraDebug.total")}
@@ -394,6 +508,12 @@ export function CameraDebugPanel() {
                       {t("cameraDebug.loop")}
                     </th>
                     <th className="px-3 py-3 font-semibold">
+                      {t("cameraDebug.toolToBackend")}
+                    </th>
+                    <th className="px-3 py-3 font-semibold">
+                      {t("cameraDebug.backendToFe")}
+                    </th>
+                    <th className="px-3 py-3 font-semibold">
                       {t("cameraDebug.delay")}
                     </th>
                     <th className="px-3 py-3 font-semibold">
@@ -406,7 +526,7 @@ export function CameraDebugPanel() {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {rows.map((row) => (
-                    <tr key={row.id}>
+                    <tr key={row.rowKey}>
                       <td className="px-3 py-3 font-medium text-slate-900">
                         {row.id}
                       </td>
@@ -416,6 +536,12 @@ export function CameraDebugPanel() {
                       </td>
                       <td className="px-3 py-3 text-slate-600">
                         {row.targetFps ? `${formatNumber(row.targetFps)} FPS` : "-"}
+                      </td>
+                      <td className="px-3 py-3 text-slate-600">
+                        {formatFpsValue(row.toolFps)}
+                      </td>
+                      <td className="px-3 py-3 text-slate-600">
+                        {row.backendFps ? `${row.backendFps} FPS` : "-"}
                       </td>
                       <td className="px-3 py-3 text-slate-600">
                         {formatMs(row.totalMs)}
@@ -434,6 +560,12 @@ export function CameraDebugPanel() {
                       </td>
                       <td className="px-3 py-3 text-slate-600">
                         {formatMs(row.loopMs)}
+                      </td>
+                      <td className="px-3 py-3 text-slate-600">
+                        {formatMs(row.toolToBackendMs)}
+                      </td>
+                      <td className="px-3 py-3 text-slate-600">
+                        {formatMs(row.backendToFeMs)}
                       </td>
                       <td className="px-3 py-3 text-slate-600">
                         {formatMs(row.delayMs)}
@@ -490,6 +622,14 @@ function formatNumber(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
+function formatFpsValue(value?: number | null) {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return "-";
+  }
+
+  return `${formatNumber(value)} FPS`;
+}
+
 function formatBytes(value?: number | null) {
   if (typeof value !== "number" || Number.isNaN(value)) {
     return "-";
@@ -500,4 +640,52 @@ function formatBytes(value?: number | null) {
   }
 
   return `${(value / 1024).toFixed(1)} KB`;
+}
+
+function resolveBottleneck({
+  backendFps,
+  cameraFps,
+  feFps,
+  toolFps,
+  t,
+}: {
+  backendFps: number;
+  cameraFps: number | null;
+  feFps: number;
+  toolFps: number | null;
+  t: (key: TranslationKey) => string;
+}) {
+  const transitions: Array<{
+    from: number | null;
+    label: TranslationKey;
+    to: number | null;
+  }> = [
+    {
+      from: cameraFps,
+      label: "cameraDebug.dropCameraTool",
+      to: toolFps,
+    },
+    {
+      from: toolFps,
+      label: "cameraDebug.dropToolBackend",
+      to: backendFps || null,
+    },
+    {
+      from: backendFps || null,
+      label: "cameraDebug.dropBackendFe",
+      to: feFps || null,
+    },
+  ];
+
+  for (const transition of transitions) {
+    if (!transition.from || !transition.to) {
+      continue;
+    }
+
+    if (transition.to < transition.from * 0.92) {
+      return t(transition.label);
+    }
+  }
+
+  return t("cameraDebug.dropNone");
 }

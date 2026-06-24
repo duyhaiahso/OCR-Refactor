@@ -6,7 +6,6 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { ListboxSelect } from "@/components/ui/listbox-select";
 import {
   CameraImageViewer,
@@ -23,13 +22,11 @@ import {
   getCameraFrameRate,
   getCameraStatus,
   getCameraStreamUrl,
-  DEFAULT_CAMERA_STREAM_FPS,
   DEFAULT_CAMERA_STREAM_JPEG_QUALITY,
   DEFAULT_CAMERA_STREAM_MAX_WIDTH,
   grabCameraFrame,
   listCameraDevices,
   listProductProfiles,
-  updateCameraFrameRate,
   updateProductProfile,
   type CameraDevice,
   type CameraFrame,
@@ -40,7 +37,7 @@ import {
   type ProductProfilePayload,
 } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-import { getAccessToken, getStoredUser } from "@/lib/session";
+import { getAccessToken } from "@/lib/session";
 
 export function CameraLiveViewPanel() {
   const { apiError, t } = useI18n();
@@ -49,15 +46,11 @@ export function CameraLiveViewPanel() {
   const [selectedProductId, setSelectedProductId] = useState("");
   const [status, setStatus] = useState<CameraRuntimeStatus | null>(null);
   const [frameRate, setFrameRate] = useState<CameraFrameRate | null>(null);
-  const [frameRateInput, setFrameRateInput] = useState(
-    String(DEFAULT_CAMERA_STREAM_FPS),
-  );
   const [frame, setFrame] = useState<CameraFrame | null>(null);
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const [grabbing, setGrabbing] = useState(false);
   const [refreshingDevices, setRefreshingDevices] = useState(false);
-  const [savingFrameRate, setSavingFrameRate] = useState(false);
   const [live, setLive] = useState(false);
   const [streamFrameUrl, setStreamFrameUrl] = useState("");
   const [liveStats, setLiveStats] = useState<CameraLiveStats | null>(null);
@@ -77,7 +70,6 @@ export function CameraLiveViewPanel() {
     () => products.find((product) => product.id === selectedProductId) ?? null,
     [products, selectedProductId],
   );
-  const canManageCameraFrameRate = canCurrentUserManageCameraFrameRate();
   useEffect(() => {
     let cancelled = false;
 
@@ -110,14 +102,6 @@ export function CameraLiveViewPanel() {
         setStatus(cameraRuntime.statusResponse);
         setDevices(cameraRuntime.devices);
         setFrameRate(cameraRuntime.frameRateResponse);
-        setFrameRateInput(
-          String(
-            Math.round(
-              cameraRuntime.frameRateResponse.data.effective_stream_fps ??
-                DEFAULT_CAMERA_STREAM_FPS,
-            ),
-          ),
-        );
       } catch (cause) {
         if (!cancelled) {
           toast.error(formatCameraApiError(cause, apiError, t, "camera.loadError"));
@@ -152,14 +136,6 @@ export function CameraLiveViewPanel() {
       setStatus(cameraRuntime.statusResponse);
       setDevices(cameraRuntime.devices);
       setFrameRate(cameraRuntime.frameRateResponse);
-      setFrameRateInput(
-        String(
-          Math.round(
-            cameraRuntime.frameRateResponse.data.effective_stream_fps ??
-              DEFAULT_CAMERA_STREAM_FPS,
-          ),
-        ),
-      );
       toast.success(t("camera.devicesRefreshed"), { id: toastId });
     } catch (cause) {
       toast.error(
@@ -270,8 +246,7 @@ export function CameraLiveViewPanel() {
       const nextFrameRate = await getCameraFrameRate(accessToken);
       setStatus(response);
       setFrameRate(nextFrameRate);
-      setFrameRateInput(String(Math.round(resolveCameraStreamFps(nextFrameRate))));
-      openStreamSocket(accessToken, toastId, resolveCameraStreamFps(nextFrameRate));
+      openStreamSocket(accessToken, toastId);
     } catch (cause) {
       setLive(false);
       toast.error(formatCameraApiError(cause, apiError, t, "camera.connectError"), {
@@ -285,13 +260,11 @@ export function CameraLiveViewPanel() {
   function openStreamSocket(
     accessToken: string,
     toastId: string | number,
-    fps = resolveCameraStreamFps(frameRate),
   ) {
     closeLiveStream({ silent: true });
 
     const socket = new WebSocket(
       getCameraStreamUrl(accessToken, {
-        fps,
         jpegQuality: DEFAULT_CAMERA_STREAM_JPEG_QUALITY,
         maxWidth: DEFAULT_CAMERA_STREAM_MAX_WIDTH,
       }),
@@ -357,7 +330,8 @@ export function CameraLiveViewPanel() {
     streamFrameTimesRef.current = frameTimes;
     setLiveStats({
       fps: frameTimes.length,
-      targetFps: meta?.stream_fps ?? null,
+      cameraFps: meta?.camera_resulting_fps ?? meta?.stream_fps ?? null,
+      cameraMaxFps: meta?.camera_max_fps ?? null,
       delayMs: meta?.sent_at_ms ? now - meta.sent_at_ms : null,
       captureTimeMs: meta?.capture_time_ms ?? null,
     });
@@ -403,43 +377,6 @@ export function CameraLiveViewPanel() {
 
     streamFrameUrlRef.current = nextFrameUrl;
     setStreamFrameUrl(nextFrameUrl);
-  }
-
-  async function handleSaveFrameRate() {
-    const accessToken = getAccessToken();
-    const fps = Number(frameRateInput);
-
-    if (!accessToken) {
-      toast.error(t("users.missingSession"));
-      return;
-    }
-
-    if (!Number.isFinite(fps) || fps < 1) {
-      toast.warning(t("camera.frameRateInvalid"));
-      return;
-    }
-
-    setSavingFrameRate(true);
-    const toastId = toast.loading(t("camera.frameRateSaving"));
-
-    try {
-      const response = await updateCameraFrameRate(accessToken, fps);
-      setFrameRate(response);
-      setFrameRateInput(String(Math.round(resolveCameraStreamFps(response))));
-      if (response.data.error || !response.data.writable) {
-        toast.warning(t("camera.frameRateStreamOnlyWarning"), { id: toastId });
-        return;
-      }
-
-      toast.success(t("camera.frameRateSaved"), { id: toastId });
-    } catch (cause) {
-      toast.error(
-        formatCameraApiError(cause, apiError, t, "camera.frameRateSaveError"),
-        { id: toastId },
-      );
-    } finally {
-      setSavingFrameRate(false);
-    }
   }
 
   function handleSavedProduct(product: ProductProfile) {
@@ -575,142 +512,136 @@ export function CameraLiveViewPanel() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-5 xl:grid-cols-[380px_minmax(0,1fr)]">
-        <Card className="h-fit">
+      <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
+        <Card className="h-fit xl:sticky xl:top-5">
           <CardHeader className="border-b border-slate-200">
             <CardTitle className="text-lg">{t("camera.setup")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4 pt-5">
-          <label className="block space-y-2">
-            <span className="text-sm font-medium text-slate-700">
-              {t("camera.productProfile")}
-            </span>
-            <ListboxSelect
-              value={selectedProductId}
-              onChange={setSelectedProductId}
-              disabled={loading || products.length === 0}
-              emptyLabel={t("products.emptyTitle")}
-              options={products.map((product) => ({
-                value: product.id,
-                label: `${product.code} - ${product.camera.deviceName || product.camera.sourceType}`,
-                description: product.name || undefined,
-              }))}
-            />
-          </label>
-
-          <Button
-            type="button"
-            className="w-full"
-            onClick={() => void handleConnectCamera()}
-            disabled={loading || connecting || live || !selectedProduct}
-          >
-            <PlugZap className="h-4 w-4" />
-            {connecting ? t("camera.connecting") : t("camera.connect")}
-          </Button>
-
-          <div className="border border-slate-200 bg-slate-50 p-3 text-sm">
-            <div className="flex items-center gap-2 font-semibold text-slate-900">
-              <Gauge className="h-4 w-4 text-cyan-700" aria-hidden="true" />
-              {t("camera.frameRate")}
-            </div>
-            <div className="mt-3 grid grid-cols-3 gap-2 text-xs text-slate-600">
-              <FrameRateMetric
-                label={t("camera.frameRateActual")}
-                value={formatFps(frameRate?.data.camera_resulting_fps)}
-              />
-              <FrameRateMetric
-                label={t("camera.frameRateMax")}
-                value={formatFps(frameRate?.data.camera_max_fps)}
-              />
-              <FrameRateMetric
-                label={t("camera.frameRateEffective")}
-                value={formatFps(frameRate?.data.effective_stream_fps)}
-              />
-            </div>
-            {canManageCameraFrameRate ? (
-              <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto] gap-2">
-                <Input
-                  type="number"
-                  min={1}
-                  max={240}
-                  step={1}
-                  inputMode="decimal"
-                  value={frameRateInput}
-                  onChange={(event) => setFrameRateInput(event.target.value)}
-                  disabled={loading || live || savingFrameRate}
-                  aria-label={t("camera.frameRateTarget")}
+            <PanelSection
+              title={t("camera.productProfile")}
+              description={selectedProduct?.name ?? t("camera.selectProductFirst")}
+            >
+              <label className="block space-y-2">
+                <ListboxSelect
+                  value={selectedProductId}
+                  onChange={setSelectedProductId}
+                  disabled={loading || products.length === 0}
+                  emptyLabel={t("products.emptyTitle")}
+                  options={products.map((product) => ({
+                    value: product.id,
+                    label: `${product.code} - ${product.camera.deviceName || product.camera.sourceType}`,
+                    description: product.name || undefined,
+                  }))}
                 />
+              </label>
+
+              <Button
+                type="button"
+                className="mt-3 w-full"
+                onClick={() => void handleConnectCamera()}
+                disabled={loading || connecting || live || !selectedProduct}
+              >
+                <PlugZap className="h-4 w-4" />
+                {connecting ? t("camera.connecting") : t("camera.connect")}
+              </Button>
+            </PanelSection>
+
+            <PanelSection
+              title={t("camera.frameRate")}
+              headerAction={
+                <Badge className="border-cyan-200 bg-cyan-50 text-cyan-700">
+                  {t("camera.frameRateNoAppLimit")}
+                </Badge>
+              }
+            >
+              <div className="grid gap-2 sm:grid-cols-3 xl:grid-cols-1 2xl:grid-cols-3">
+                <FrameRateMetric
+                  label={t("camera.frameRateActual")}
+                  value={formatFps(frameRate?.data.camera_resulting_fps)}
+                />
+                <FrameRateMetric
+                  label={t("camera.frameRateMax")}
+                  value={
+                    frameRate?.data.camera_max_fps
+                      ? formatFps(frameRate.data.camera_max_fps)
+                      : t("camera.frameRateCameraLimit")
+                  }
+                />
+                <FrameRateMetric
+                  label={t("camera.frameRateStreamMode")}
+                  value={t("camera.frameRateFastest")}
+                />
+              </div>
+              <div className="mt-3 text-xs leading-5 text-slate-500">
+                {t("camera.frameRateFastestHint")}
+              </div>
+            </PanelSection>
+
+            <PanelSection
+              title={t("camera.devices")}
+              headerAction={
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => void handleSaveFrameRate()}
-                  disabled={loading || live || savingFrameRate}
-                  className="h-10 px-3"
+                  size="sm"
+                  onClick={() => void refreshCameraRuntime()}
+                  disabled={refreshingDevices || connecting || live}
+                  className="h-9 px-3"
                 >
-                  {savingFrameRate
-                    ? t("camera.frameRateSavingShort")
-                    : t("camera.frameRateApply")}
+                  <RefreshCcw
+                    className={[
+                      "h-4 w-4",
+                      refreshingDevices ? "animate-spin" : "",
+                    ].join(" ")}
+                    aria-hidden="true"
+                  />
+                  {refreshingDevices
+                    ? t("camera.refreshingDevices")
+                    : t("camera.refreshDevices")}
                 </Button>
-              </div>
-            ) : null}
-            {!canManageCameraFrameRate ? (
-              <div className="mt-3 text-xs text-slate-500">
-                {t("camera.frameRateReadonly")}
-              </div>
-            ) : null}
-          </div>
+              }
+            >
+              <div className="max-h-72 space-y-2 overflow-y-auto pr-1 text-slate-600">
+                {devices.length > 0 ? (
+                  devices.map((device) => (
+                    <button
+                      key={`${device.index}-${device.serial_number ?? device.friendly_name}`}
+                      type="button"
+                      onClick={() => {
+                        if (!selectedProduct) {
+                          return;
+                        }
 
-          <div className="border border-slate-200 bg-slate-50 p-3 text-sm">
-            <div className="flex items-center justify-between gap-3">
-              <div className="font-semibold text-slate-900">
-                {t("camera.devices")}
+                        handleSavedProduct({
+                          ...selectedProduct,
+                          camera: {
+                            ...selectedProduct.camera,
+                            sourceType: "usb",
+                            deviceName: device.friendly_name,
+                          },
+                        });
+                      }}
+                      className="block w-full border border-slate-200 bg-white px-3 py-3 text-left transition hover:border-cyan-200 hover:bg-cyan-50"
+                    >
+                      <div className="font-medium text-slate-900">
+                        #{device.index} {device.friendly_name}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {device.model_name ?? "-"} - {device.serial_number ?? "-"}
+                      </div>
+                    </button>
+                  ))
+                ) : (
+                  <div>{t("camera.noDevices")}</div>
+                )}
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => void refreshCameraRuntime()}
-                disabled={refreshingDevices || connecting || live}
-                className="h-9 px-3"
-              >
-                <RefreshCcw
-                  className={[
-                    "h-4 w-4",
-                    refreshingDevices ? "animate-spin" : "",
-                  ].join(" ")}
-                  aria-hidden="true"
-                />
-                {refreshingDevices
-                  ? t("camera.refreshingDevices")
-                  : t("camera.refreshDevices")}
-              </Button>
-            </div>
-            <div className="mt-2 space-y-2 text-slate-600">
-              {devices.length > 0 ? (
-                devices.map((device) => (
-                  <div
-                    key={`${device.index}-${device.serial_number ?? device.friendly_name}`}
-                    className="border border-slate-200 bg-white px-3 py-2"
-                  >
-                    <div className="font-medium text-slate-900">
-                      #{device.index} {device.friendly_name}
-                    </div>
-                    <div className="text-xs text-slate-500">
-                      {device.model_name ?? "-"} - {device.serial_number ?? "-"}
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div>{t("camera.noDevices")}</div>
-              )}
-            </div>
-          </div>
-
+            </PanelSection>
           </CardContent>
         </Card>
 
         <CameraSettingsForm
-          key={`${selectedProduct?.id ?? "empty-camera-settings"}-${selectedProduct?.updatedAt ?? "new"}`}
+          key={buildSettingsFormKey(selectedProduct)}
           product={selectedProduct}
           devices={devices}
           disabled={loading || live}
@@ -726,6 +657,8 @@ type StreamFrameMeta = {
   capture_time_ms?: number | null;
   sent_at_ms?: number | null;
   stream_fps?: number | null;
+  camera_resulting_fps?: number | null;
+  camera_max_fps?: number | null;
 };
 
 type StreamMessage = StreamFrameMeta | { error?: string };
@@ -759,8 +692,36 @@ function FrameRateMetric({
   );
 }
 
-function resolveCameraStreamFps(frameRate: CameraFrameRate | null) {
-  return frameRate?.data.effective_stream_fps ?? DEFAULT_CAMERA_STREAM_FPS;
+function PanelSection({
+  title,
+  description,
+  headerAction,
+  children,
+}: {
+  title: string;
+  description?: string;
+  headerAction?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="border border-slate-200 bg-slate-50 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 font-semibold text-slate-900">
+            <Gauge className="h-4 w-4 text-cyan-700" aria-hidden="true" />
+            <span>{title}</span>
+          </div>
+          {description ? (
+            <div className="mt-1 text-xs leading-5 text-slate-500">
+              {description}
+            </div>
+          ) : null}
+        </div>
+        {headerAction ? <div className="shrink-0">{headerAction}</div> : null}
+      </div>
+      <div className="mt-3">{children}</div>
+    </section>
+  );
 }
 
 function defaultCameraFrameRate(): CameraFrameRate {
@@ -772,7 +733,7 @@ function defaultCameraFrameRate(): CameraFrameRate {
       configured_fps: null,
       camera_resulting_fps: null,
       camera_max_fps: null,
-      effective_stream_fps: DEFAULT_CAMERA_STREAM_FPS,
+      effective_stream_fps: null,
       writable: false,
       error: null,
       source: null,
@@ -786,17 +747,6 @@ function formatFps(value: number | null | undefined) {
   }
 
   return `${value.toFixed(value % 1 === 0 ? 0 : 1)} FPS`;
-}
-
-function canCurrentUserManageCameraFrameRate() {
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  const sessionUser = getStoredUser();
-  return Boolean(
-    sessionUser?.isDev || sessionUser?.permissions.includes("camera.manage"),
-  );
 }
 
 function mediaTypeForFrame(format: string) {
@@ -823,6 +773,20 @@ function buildViewerKey(product: ProductProfile | null) {
     product.camera.previewPanX,
     product.camera.previewPanY,
     product.camera.previewRotation,
+  ].join("-");
+}
+
+function buildSettingsFormKey(product: ProductProfile | null) {
+  if (!product) {
+    return "camera-settings-empty";
+  }
+
+  return [
+    product.id,
+    product.updatedAt,
+    product.camera.sourceType,
+    product.camera.deviceName,
+    product.camera.rtspUrl,
   ].join("-");
 }
 

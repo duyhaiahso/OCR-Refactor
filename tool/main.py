@@ -37,10 +37,11 @@ def _ensure_single_instance() -> bool:
     except Exception:
         return True
 
+    api_port = get_config().api_port
     mutex = win32event.CreateMutex(
         None,
         False,
-        "Global\\AHSO_DRB_OCR_AI_Device_Tool",
+        f"Global\\AHSO_DRB_OCR_AI_Device_Tool_{api_port}",
     )
     return win32api.GetLastError() != winerror.ERROR_ALREADY_EXISTS
 

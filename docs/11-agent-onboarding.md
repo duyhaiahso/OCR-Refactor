@@ -58,6 +58,7 @@ scripts/   future automation scripts
 - Swagger API documentation is available at `/api/docs`.
 - Frontend login works.
 - Frontend dashboard shell exists.
+- Frontend login shows API/license/dongle startup status and disables sign-in until the backend confirms a valid dongle.
 - Frontend role permission UI exists.
 - Frontend users page lists users.
 - Basic shadcn-style components added.
@@ -78,6 +79,7 @@ scripts/   future automation scripts
 - Product profile ROI editor currently supports draw/move/resize/rotate, multi-select with `Shift`, copy/paste, undo/redo, alignment/equal-spacing/straight-angle assists, overlap validation, and simulated camera preview background.
 - Backend inspection foundation now includes a Device Tool client plus `/api/inspections/start`, `/api/inspections/current`, and `/api/inspections/:jobId/stop` with per-ROI inspection logs.
 - Backend camera foundation now proxies Device Tool status, device discovery, connect, grab, and live stream through `/api/camera/status`, `/api/camera/devices`, `/api/camera/connect`, `/api/camera/grab`, and `/api/camera/stream`.
+- Backend license foundation now checks the USB dongle through the legacy `System8.dll` flow, records `license_logs`, exposes `/api/system/license/public` for login and `/api/system/license` for authenticated status, and blocks login when the dongle is missing unless `DONGLE_MOCK_MODE=true`.
 - Dedicated Camera page exists at `/dashboard/camera` with product-profile selection, Device Tool status/device discovery, connect/grab/live controls, view adjustment persistence, and manual refresh for camera status/devices.
 - AppShell warms up camera status/device discovery in the background for users with camera or inspection permissions.
 
@@ -94,10 +96,16 @@ scripts/   future automation scripts
 - Dedicated ROI config screen/module.
 - Dedicated history/reports screens and query flows.
 - Full end-to-end inspection runtime orchestration beyond the initial backend Device Tool integration.
-- Electron shell.
-- Dongle integration.
+- Full Electron boot-time dongle gate, periodic runtime recheck, and production packaging validation.
 - Python/FastAPI AI service.
 - User-level permission override UI.
+
+### Electron MVP
+
+- `electron/` now contains the first desktop main process and preload bridge.
+- `npm run dev:desktop` launches the development desktop shell.
+- The shell enforces single instance, reuses existing healthy local services, auto-selects fallback ports for Device Tool/backend/frontend when default ports are occupied or unhealthy, waits for health checks, and shuts down only owned child processes.
+- Production installer generation and bundled service artifacts are not implemented yet.
 
 ## Current Backend Entry Points
 

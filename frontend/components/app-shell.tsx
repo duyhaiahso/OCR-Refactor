@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import { Power, Settings } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
-import { ReactNode, useEffect, useState } from "react";
+import { ReactNode, useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
 import { LanguageToggle } from "@/components/language-toggle";
 import { Button } from "@/components/ui/button";
-import type { SessionUser } from "@/lib/api";
+import type { SessionUser, SystemLicenseState } from "@/lib/api";
 import { getCameraStatus, getCurrentSession, listCameraDevices } from "@/lib/api";
 import type { TranslationKey } from "@/lib/i18n";
 import { useI18n } from "@/lib/i18n";
@@ -14,6 +16,8 @@ import {
   getAccessToken,
   saveSession,
 } from "@/lib/session";
+import { getDesktopBridge } from "@/lib/desktop";
+import { useLicenseWatchdog } from "@/lib/use-license-watchdog";
 
 type AppShellProps = {
   children: ReactNode;
@@ -40,6 +44,7 @@ const menuItems = [
   { labelKey: "nav.roi", href: "/dashboard/roi", permission: "roi.edit" },
   { labelKey: "nav.history", href: "/dashboard/history", permission: "history.view" },
   { labelKey: "nav.reports", href: "/dashboard/reports", permission: "report.view" },
+  { labelKey: "nav.settings", href: "/dashboard/settings", permission: "system.shutdown" },
 ] satisfies Array<{
   labelKey: TranslationKey;
   href: string;
@@ -52,6 +57,18 @@ export function AppShell({ children }: AppShellProps) {
   const { t } = useI18n();
   const [user, setUser] = useState<SessionUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const handleLicenseLost = useCallback(
+    (license: SystemLicenseState) => {
+      clearSession();
+      toast.error(license.message || t("session.licenseLost"));
+      router.replace("/login");
+    },
+    [router, t],
+  );
+  const { license } = useLicenseWatchdog({
+    enabled: Boolean(user),
+    onLicenseLost: handleLicenseLost,
+  });
 
   useEffect(() => {
     const token = getAccessToken();
@@ -83,6 +100,18 @@ export function AppShell({ children }: AppShellProps) {
     router.replace("/login");
   }
 
+  async function handleExitApp() {
+    const bridge = getDesktopBridge();
+
+    if (!bridge) {
+      toast.warning(t("settings.desktopOnly"));
+      return;
+    }
+
+    toast.loading(t("settings.exiting"));
+    await bridge.exitApp();
+  }
+
   if (loading && !user) {
     return (
       <main className="flex min-h-[100dvh] items-center justify-center bg-slate-100">
@@ -101,6 +130,8 @@ export function AppShell({ children }: AppShellProps) {
       user.isDev ||
       user.permissions.includes(item.permission),
   );
+  const canManageDesktopSettings =
+    user.isDev || user.permissions.includes("system.shutdown");
   const usesSidebar = user.role === "dev" || user.role === "admin";
   const navLinks = (
     <nav
@@ -151,6 +182,26 @@ export function AppShell({ children }: AppShellProps) {
           )}
           <div className="flex min-w-0 flex-wrap items-center gap-3 text-sm sm:justify-end lg:gap-4">
             <LanguageToggle />
+            <div
+              className={[
+                "flex h-9 items-center gap-2 border px-3 text-xs font-semibold",
+                license?.licensed === true && license.donglePresent === true
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                  : "border-slate-200 bg-slate-50 text-slate-600",
+              ].join(" ")}
+            >
+              <span
+                className={[
+                  "h-2.5 w-2.5 rounded-full",
+                  license?.licensed === true && license.donglePresent === true
+                    ? "bg-emerald-500"
+                    : "bg-slate-300",
+                ].join(" ")}
+              />
+              {license?.licensed === true && license.donglePresent === true
+                ? t("dashboard.donglePresent")
+                : t("dashboard.pending")}
+            </div>
             <div className="min-w-0 text-left sm:text-right">
               <div className="font-semibold">{user.fullName}</div>
               <div className="text-slate-500">
@@ -158,6 +209,26 @@ export function AppShell({ children }: AppShellProps) {
                 {user.isDev ? ` / ${t("session.hiddenDev")}` : ""}
               </div>
             </div>
+            {canManageDesktopSettings ? (
+              <Button
+                asChild
+                variant="outline"
+                size="icon"
+                title={t("nav.settings")}
+              >
+                <Link href="/dashboard/settings">
+                  <Settings className="h-4 w-4" />
+                </Link>
+              </Button>
+            ) : null}
+            <Button
+              onClick={handleExitApp}
+              variant="outline"
+              size="icon"
+              title={t("settings.exitApp")}
+            >
+              <Power className="h-4 w-4" />
+            </Button>
             <Button
               onClick={handleLogout}
               variant="outline"

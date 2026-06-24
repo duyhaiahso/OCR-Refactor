@@ -59,7 +59,9 @@ Current implemented foundation:
 - Auth, JWT session, permissions, roles, and users APIs are implemented.
 - Backend Device Tool integration foundation exists with inspection start/current/stop endpoints and per-ROI inspection logging.
 - Backend camera APIs proxy Device Tool status, device discovery, connect, grab, and live stream through the local backend.
+- Backend license APIs check the legacy `System8.dll` dongle flow, log the result, expose login/dashboard status, and block login when the dongle is missing unless dongle mock mode is enabled.
 - Frontend login, dashboard, role permissions, and user management screens exist.
+- Frontend login shows API/license/dongle startup status before allowing sign-in.
 - User management supports create/edit/delete/status flows with shared confirmation UI.
 - Normal admin cannot manage protected `admin/dev` role permissions; only `dev` can.
 - i18n, Sonner notifications, and error/not-found screens are wired for English/Vietnamese.
@@ -69,6 +71,13 @@ Current implemented foundation:
 - `/dashboard` already hosts an operator runtime foundation with product selector, ROI preview, persisted batch-size save, and OK/NG counters.
 - `/dashboard/camera` exists with product-profile selection, Device Tool status/device discovery, connect/grab/live controls, view adjustment persistence, and manual camera refresh.
 - Dedicated `roi`, `history`, and `reports` pages are not created yet even though their menu permissions exist.
+- Electron MVP shell now exists in `electron/` with single-instance handling, local service health/startup, automatic fallback ports for Device Tool/backend/frontend, renderer launch, and owned-process shutdown for development.
+
+Run the desktop development shell:
+
+```powershell
+npm run dev:desktop
+```
 
 ## Port Safety Rule
 

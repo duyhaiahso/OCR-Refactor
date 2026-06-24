@@ -2,6 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import { SystemService } from '../system/system.service';
 import { UsersService } from '../users/users.service';
 import { LoginDto } from './dto/login.dto';
 
@@ -10,10 +11,17 @@ export class AuthService {
   constructor(
     private readonly configService: ConfigService,
     private readonly jwtService: JwtService,
+    private readonly systemService: SystemService,
     private readonly usersService: UsersService,
   ) {}
 
   async login(dto: LoginDto) {
+    const licenseAllowed = await this.systemService.assertLoginAllowed();
+
+    if (!licenseAllowed) {
+      throw new UnauthorizedException('License dongle is missing');
+    }
+
     const user = await this.usersService.findByUsername(dto.username);
 
     if (!user || !user.active) {
