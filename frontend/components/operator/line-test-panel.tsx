@@ -1,21 +1,26 @@
 "use client";
 
+import Link from "next/link";
 import {
   CheckCircle2,
   CircleDot,
+  ChevronDown,
+  ChevronUp,
   FileImage,
   FolderOpen,
   Package,
+  Pause,
   RotateCcw,
   Save,
   Send,
   Timer,
 } from "lucide-react";
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { CameraPreviewTransformLayer } from "@/components/camera/camera-preview-image";
 import { useConnectedCameraPreview } from "@/components/camera/use-connected-camera-preview";
 import { OperatorRoiEditor } from "@/components/operator/operator-roi-editor";
+import { RoiResultDetailsDropdown } from "@/components/reports/roi-result-details-dropdown";
+import { TestFailImagePreview } from "@/components/reports/test-fail-image-preview";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardTitle } from "@/components/ui/card";
@@ -26,8 +31,10 @@ import {
   listProductProfiles,
   listTestSessionReports,
   testInspectionImage,
+  updateProductProfile,
   type InspectionSlotState,
   type ProductProfile,
+  type ProductProfilePayload,
   type RoiRegion,
   type TestSessionReportListItem,
   type TestInspectionImageResult,
@@ -89,10 +96,13 @@ type BatchTestReportRow = {
   slots: InspectionSlotState[];
 };
 
+const savedSessionsPageSize = 5;
+
 export function LineTestPanel() {
   const { t, apiError } = useI18n();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
+  const cancelBatchTestRef = useRef(false);
   const [products, setProducts] = useState<ProductProfile[]>([]);
   const [selectedProductId, setSelectedProductId] = useState("");
   const [dataSource, setDataSource] = useState<DataSource>("empty");
@@ -103,6 +113,7 @@ export function LineTestPanel() {
   const [testing, setTesting] = useState(false);
   const [batchTesting, setBatchTesting] = useState(false);
   const [savingBatchReport, setSavingBatchReport] = useState(false);
+  const [savingRoi, setSavingRoi] = useState(false);
   const [result, setResult] = useState<TestInspectionImageResult | null>(null);
   const [cropPreviews, setCropPreviews] = useState<RoiCropPreview[]>([]);
   const [roiDraft, setRoiDraft] = useState<RoiRegion[]>([]);
@@ -111,6 +122,10 @@ export function LineTestPanel() {
   const [batchReport, setBatchReport] = useState<BatchTestReportRow[]>([]);
   const [savedBatchReportId, setSavedBatchReportId] = useState("");
   const [savedSessions, setSavedSessions] = useState<TestSessionReportListItem[]>([]);
+  const [expandedSavedSessionIds, setExpandedSavedSessionIds] = useState<string[]>([]);
+  const [loadingSavedSessions, setLoadingSavedSessions] = useState(true);
+  const [savedSessionsPage, setSavedSessionsPage] = useState(1);
+  const [savedSessionsTotalPages, setSavedSessionsTotalPages] = useState(1);
   const [batchProgress, setBatchProgress] = useState<{
     current: number;
     total: number;
@@ -179,10 +194,6 @@ export function LineTestPanel() {
     folderInput.setAttribute("directory", "");
   }, []);
 
-  useEffect(() => {
-    void loadSavedSessions();
-  }, []);
-
   const selectedProduct = useMemo(
     () => products.find((product) => product.id === selectedProductId) ?? null,
     [products, selectedProductId],
@@ -196,6 +207,10 @@ export function LineTestPanel() {
             roiRegions: roiDraft,
           }
         : null,
+    [roiDraft, selectedProduct],
+  );
+  const hasUnsavedRoiChanges = useMemo(
+    () => !areRoiRegionsEqual(selectedProduct?.roiRegions ?? [], roiDraft),
     [roiDraft, selectedProduct],
   );
 
@@ -226,6 +241,7 @@ export function LineTestPanel() {
   const batchOkCount = batchReport.filter((row) => row.result === "OK").length;
   const batchNgCount = batchReport.filter((row) => row.result === "NG").length;
   const batchErrorCount = batchReport.filter((row) => row.result === "ERROR").length;
+  const failedBatchRows = batchReport.filter((row) => row.result !== "OK");
 
   function handleProductChange(productId: string) {
     setSelectedProductId(productId);
@@ -252,19 +268,92 @@ export function LineTestPanel() {
     toast.success(t("lineTest.roiReset"));
   }
 
-  async function loadSavedSessions() {
+  async function handleSaveRoi() {
     const accessToken = getAccessToken();
 
     if (!accessToken) {
+      toast.error(t("users.missingSession"));
+      return;
+    }
+
+    if (!selectedProduct) {
+      toast.warning(t("lineTest.selectProductFirst"));
+      return;
+    }
+
+    if (!hasUnsavedRoiChanges) {
+      toast.info(t("lineTest.roiSaveNoChanges"));
+      return;
+    }
+
+    setSavingRoi(true);
+    const toastId = toast.loading(t("lineTest.roiSaving"));
+
+    try {
+      const response = await updateProductProfile(
+        accessToken,
+        selectedProduct.id,
+        buildLineTestProductPayload(selectedProduct, roiDraft),
+      );
+      const savedProduct = response.data;
+      setProducts((current) =>
+        current.map((product) =>
+          product.id === savedProduct.id ? savedProduct : product,
+        ),
+      );
+      setSelectedProductId(savedProduct.id);
+      setRoiDraft(cloneRoiRegions(savedProduct.roiRegions));
+      setResult(null);
+      setCropPreviews([]);
+      toast.success(t("lineTest.roiSaved"), { id: toastId });
+    } catch (cause) {
+      const message =
+        cause instanceof ApiError
+          ? apiError(cause.message, "lineTest.roiSaveError")
+          : t("lineTest.roiSaveError");
+      toast.error(message, { id: toastId });
+    } finally {
+      setSavingRoi(false);
+    }
+  }
+
+  const loadSavedSessions = useCallback(async (page: number) => {
+    const accessToken = getAccessToken();
+
+    if (!accessToken) {
+      setLoadingSavedSessions(false);
       return;
     }
 
     try {
-      const response = await listTestSessionReports(accessToken, 10);
+      const response = await listTestSessionReports(
+        accessToken,
+        savedSessionsPageSize,
+        page,
+      );
       setSavedSessions(response.data);
+      setSavedSessionsTotalPages(response.meta.totalPages);
+      setExpandedSavedSessionIds([]);
     } catch {
       // Keep the current test flow usable even when report history cannot load.
+      setSavedSessions([]);
+      setSavedSessionsTotalPages(1);
+    } finally {
+      setLoadingSavedSessions(false);
     }
+  }, []);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadSavedSessions(savedSessionsPage);
+  }, [loadSavedSessions, savedSessionsPage]);
+
+  function toggleSavedSessionDetails(sessionId: string) {
+    setExpandedSavedSessionIds((current) =>
+      current.includes(sessionId)
+        ? current.filter((id) => id !== sessionId)
+        : [...current, sessionId],
+    );
   }
 
   function syncRoiToPortraitShape() {
@@ -459,11 +548,16 @@ export function LineTestPanel() {
     setBatchTesting(true);
     setBatchReport([]);
     setSavedBatchReportId("");
+    cancelBatchTestRef.current = false;
 
     try {
       const rows: BatchTestReportRow[] = [];
 
       for (const [index, file] of batchFiles.entries()) {
+        if (cancelBatchTestRef.current) {
+          break;
+        }
+
         setBatchProgress({
           current: index + 1,
           total: batchFiles.length,
@@ -613,7 +707,13 @@ export function LineTestPanel() {
       });
 
       setSavedBatchReportId(response.data.id);
-      await loadSavedSessions();
+      if (savedSessionsPage === 1) {
+        setLoadingSavedSessions(true);
+        await loadSavedSessions(1);
+      } else {
+        setLoadingSavedSessions(true);
+        setSavedSessionsPage(1);
+      }
       return response;
     } finally {
       setSavingBatchReport(false);
@@ -749,15 +849,28 @@ export function LineTestPanel() {
                 <FolderOpen className="h-5 w-5" />
                 {t("lineTest.selectFolder")}
               </Button>
-              <Button
-                type="button"
-                className="h-12 border-[#274d7d] bg-[#274d7d] text-base text-white hover:bg-[#1f3d64]"
-                disabled={isBusy || batchFiles.length === 0}
-                onClick={() => void runBatchTest()}
-              >
-                <FolderOpen className="h-5 w-5" />
-                {batchTesting ? t("lineTest.batchTesting") : t("lineTest.batchTest")}
-              </Button>
+              {batchTesting ? (
+                <Button
+                  type="button"
+                  className="h-12 border-[#d92d20] bg-[#ef3e36] text-base text-white hover:bg-[#d92d20]"
+                  onClick={() => {
+                    cancelBatchTestRef.current = true;
+                  }}
+                >
+                  <Pause className="h-5 w-5" />
+                  {t("lineTest.stopBatchTest")}
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  className="h-12 border-[#274d7d] bg-[#274d7d] text-base text-white hover:bg-[#1f3d64]"
+                  disabled={testing || batchFiles.length === 0}
+                  onClick={() => void runBatchTest()}
+                >
+                  <FolderOpen className="h-5 w-5" />
+                  {t("lineTest.batchTest")}
+                </Button>
+              )}
               <div className="min-h-5 truncate text-sm font-medium text-slate-700">
                 {imageName || t("lineTest.noImageSelected")}
               </div>
@@ -830,9 +943,22 @@ export function LineTestPanel() {
           <div className="text-3xl font-bold text-[#2270c6]">
             {t("lineTest.referenceImage")}
           </div>
-          <div className="flex items-center gap-2 text-sm font-semibold text-[#274d7d]">
-            <Timer className="h-4 w-4" />
-            {result ? `${result.cycleTimeMs} ms` : t("lineTest.waiting")}
+          <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-[#274d7d]">
+            <Badge
+              className={
+                hasUnsavedRoiChanges
+                  ? "border-amber-200 bg-amber-50 text-amber-800"
+                  : "border-emerald-200 bg-emerald-50 text-emerald-700"
+              }
+            >
+              {hasUnsavedRoiChanges
+                ? t("lineTest.roiStatusDraft")
+                : t("lineTest.roiStatusSaved")}
+            </Badge>
+            <div className="flex items-center gap-2">
+              <Timer className="h-4 w-4" />
+              {result ? `${result.cycleTimeMs} ms` : t("lineTest.waiting")}
+            </div>
           </div>
         </div>
         <div className="p-4">
@@ -866,8 +992,22 @@ export function LineTestPanel() {
                   </Button>
                   <Button
                     type="button"
+                    variant={hasUnsavedRoiChanges ? undefined : "outline"}
+                    className={
+                      hasUnsavedRoiChanges
+                        ? "border-[#c47b18] bg-[#f0a53b] text-slate-950 hover:bg-[#d89435]"
+                        : "border-[#274d7d] bg-white text-[#274d7d] hover:bg-slate-50"
+                    }
+                    disabled={savingRoi || !hasUnsavedRoiChanges}
+                    onClick={() => void handleSaveRoi()}
+                  >
+                    <Save className="h-4 w-4" />
+                    {savingRoi ? t("lineTest.roiSaving") : t("lineTest.saveRoi")}
+                  </Button>
+                  <Button
+                    type="button"
                     className="border-[#274d7d] bg-[#274d7d] text-white hover:bg-[#1f3d64]"
-                    disabled={isBusy}
+                    disabled={isBusy || savingRoi}
                     onClick={() => void transmitImage()}
                   >
                     <Send className="h-4 w-4" />
@@ -1008,6 +1148,32 @@ export function LineTestPanel() {
                   </tbody>
                 </table>
               </div>
+
+              {testProduct && failedBatchRows.length > 0 ? (
+                <div className="grid gap-4">
+                  <div className="text-sm font-semibold uppercase tracking-normal text-slate-700">
+                    {t("lineTest.failedImagePreview")}
+                  </div>
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    {failedBatchRows.map((row) => (
+                      <BatchFailPreviewCard
+                        key={`fail-preview-${row.relativePath}`}
+                        product={testProduct}
+                        row={row}
+                        resultLabel={t("lineTest.result")}
+                        errorLabel={t("lineTest.error")}
+                        cycleTimeLabel={t("lineTest.cycleTime")}
+                        roiLabel={t("lineTest.roiSlot")}
+                        expectedTextLabel={t("dashboard.expectedText")}
+                        rawTextLabel={t("dashboard.rawText")}
+                        viewDetailsLabel={t("lineTest.viewDetails")}
+                        hideDetailsLabel={t("lineTest.hideDetails")}
+                        emptyText={t("reports.testSessionNoRoi")}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : (
             <div className="border border-dashed border-slate-300 p-6 text-center text-sm font-medium text-slate-500">
@@ -1019,90 +1185,132 @@ export function LineTestPanel() {
 
       <Card className="border-[#86a8cf] bg-white shadow-none">
         <CardContent className="p-4">
-          <div className="mb-3 flex items-center gap-2 text-lg font-bold text-slate-950">
-            <FolderOpen className="h-5 w-5 text-[#274d7d]" />
-            {t("lineTest.savedSessions")}
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-lg font-bold text-slate-950">
+              <FolderOpen className="h-5 w-5 text-[#274d7d]" />
+              {t("lineTest.savedSessions")}
+            </div>
+            <Button
+              asChild
+              type="button"
+              variant="outline"
+              className="border-[#274d7d] bg-white text-[#274d7d] hover:bg-slate-50"
+            >
+              <Link href="/dashboard/reports">{t("lineTest.openReports")}</Link>
+            </Button>
           </div>
 
-          {savedSessions.length > 0 ? (
+          {loadingSavedSessions ? (
+            <div className="border border-dashed border-slate-300 p-6 text-center text-sm font-medium text-slate-500">
+              {t("reports.testSessionsLoading")}
+            </div>
+          ) : savedSessions.length > 0 ? (
             <div className="grid gap-3">
-              {savedSessions.map((session) => (
-                <div key={session.id} className="border border-slate-200 bg-slate-50">
-                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-3 py-2">
-                    <div className="min-w-0">
-                      <div className="font-semibold text-slate-950">
-                        {session.productCode}
-                      </div>
-                      <div className="text-xs text-slate-500">
-                        {formatMessage(t("lineTest.batchReportId"), {
-                          reportId: session.id,
-                        })}
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap gap-2 text-xs font-semibold">
-                      <Badge className="border-[#9db7d8] bg-[#edf5ff] text-[#274d7d]">
-                        {formatDateTime(session.createdAt)}
-                      </Badge>
-                      <Badge className="border-[#9db7d8] bg-[#edf5ff] text-[#274d7d]">
-                        {formatMessage(t("lineTest.savedSessionSummary"), {
-                          total: session.totalImages,
-                          failed: session.failedImages.length,
-                        })}
-                      </Badge>
-                    </div>
-                  </div>
-                  <div className="grid gap-2 p-3">
-                    {session.failedImages.length > 0 ? (
-                      session.failedImages.map((image) => (
-                        <div key={image.id} className="border border-slate-200 bg-white">
-                          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-3 py-2 text-sm">
-                            <div className="font-medium text-slate-950">
-                              {image.relativePath}
-                            </div>
-                            <Badge
-                              className={
-                                image.result === "NG"
-                                  ? "border-red-200 bg-red-50 text-red-700"
-                                  : "border-slate-200 bg-slate-100 text-slate-700"
-                              }
-                            >
-                              {image.result}
-                            </Badge>
-                          </div>
-                          <div className="grid gap-2 px-3 py-2 text-xs text-slate-600">
-                            {image.roiResults.map((roi, index) => (
-                              <div
-                                key={`${image.id}-${roi.slotIndex ?? index}`}
-                                className="border border-slate-100 bg-slate-50 px-2 py-2"
-                              >
-                                <div className="font-semibold text-slate-800">
-                                  {roi.slotLabel ?? `${t("lineTest.roiSlot")} ${roi.slotIndex ?? "-"}`}
-                                </div>
-                                <div>
-                                  {t("lineTest.result")}: {roi.result}
-                                </div>
-                                <div>
-                                  {t("dashboard.expectedText")}: {roi.expectedText ?? "-"}
-                                </div>
-                                <div>
-                                  {t("dashboard.rawText")}: {roi.rawText ?? "-"}
-                                </div>
-                                <div>
-                                  {t("lineTest.error")}: {roi.errorMessage ?? "-"}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
+              {savedSessions.map((session) => {
+                const expanded = expandedSavedSessionIds.includes(session.id);
+
+                return (
+                  <div
+                    key={session.id}
+                    className="overflow-hidden border border-slate-200 bg-slate-50"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-3 bg-white px-3 py-3">
+                      <div className="min-w-0">
+                        <div className="font-semibold text-slate-950">
+                          {session.productCode}
                         </div>
-                      ))
-                    ) : (
-                      <div className="text-sm text-slate-500">
-                        {t("lineTest.savedSessionNoFailures")}
+                        <div className="text-xs text-slate-500">
+                          {formatDateTime(session.createdAt)}
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {formatMessage(t("lineTest.batchReportId"), {
+                            reportId: session.id,
+                          })}
+                        </div>
                       </div>
-                    )}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge className="border-[#9db7d8] bg-[#edf5ff] text-[#274d7d]">
+                          {formatMessage(t("lineTest.savedSessionSummary"), {
+                            total: session.totalImages,
+                            failed: session.failedImages.length,
+                          })}
+                        </Badge>
+                        <Badge className="border-emerald-200 bg-emerald-50 text-emerald-700">
+                          OK {session.okImages}
+                        </Badge>
+                        <Badge className="border-red-200 bg-red-50 text-red-700">
+                          NG {session.ngImages}
+                        </Badge>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="border-[#274d7d] bg-white text-[#274d7d] hover:bg-slate-50"
+                          onClick={() => toggleSavedSessionDetails(session.id)}
+                        >
+                          {expanded ? (
+                            <ChevronUp className="h-4 w-4" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4" />
+                          )}
+                          {expanded
+                            ? t("lineTest.hideDetails")
+                            : t("lineTest.viewDetails")}
+                        </Button>
+                      </div>
+                    </div>
+
+                    {expanded ? (
+                      <div className="border-t border-slate-200 px-3 py-3">
+                        <div className="grid gap-3 md:grid-cols-4">
+                          <InfoTile
+                            label={t("lineTest.savedSessionImages")}
+                            value={session.totalImages}
+                            className="border-[#f0a53b] bg-white text-slate-950"
+                          />
+                          <InfoTile
+                            label={t("operator.ok")}
+                            value={session.okImages}
+                            className="border-[#0f9f47] bg-[#15b455] text-white"
+                          />
+                          <InfoTile
+                            label={t("operator.ng")}
+                            value={session.ngImages}
+                            className="border-[#d92d20] bg-[#ef3e36] text-white"
+                          />
+                          <InfoTile
+                            label={t("lineTest.error")}
+                            value={session.errorImages}
+                            className="border-slate-400 bg-slate-700 text-white"
+                          />
+                        </div>
+                        <div className="mt-3 border border-dashed border-slate-300 px-4 py-3 text-sm text-slate-600">
+                          {t("lineTest.savedSessionDetailsHint")}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
-                </div>
-              ))}
+                );
+              })}
+              <InlinePaginationControls
+                currentPage={savedSessionsPage}
+                totalPages={savedSessionsTotalPages}
+                previousLabel={t("common.previous")}
+                nextLabel={t("common.next")}
+                pageIndicator={formatMessage(t("common.pageIndicator"), {
+                  page: savedSessionsPage,
+                  total: savedSessionsTotalPages,
+                })}
+                onPrevious={() => {
+                  setLoadingSavedSessions(true);
+                  setSavedSessionsPage((page) => Math.max(1, page - 1));
+                }}
+                onNext={() => {
+                  setLoadingSavedSessions(true);
+                  setSavedSessionsPage((page) =>
+                    Math.min(savedSessionsTotalPages, page + 1),
+                  );
+                }}
+              />
             </div>
           ) : (
             <div className="border border-dashed border-slate-300 p-6 text-center text-sm font-medium text-slate-500">
@@ -1331,6 +1539,48 @@ function DebugMetricBar({
   );
 }
 
+function InlinePaginationControls({
+  currentPage,
+  totalPages,
+  previousLabel,
+  nextLabel,
+  pageIndicator,
+  onPrevious,
+  onNext,
+}: {
+  currentPage: number;
+  totalPages: number;
+  previousLabel: string;
+  nextLabel: string;
+  pageIndicator: string;
+  onPrevious: () => void;
+  onNext: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border border-slate-200 bg-white px-3 py-3">
+      <Button
+        type="button"
+        variant="outline"
+        className="border-[#274d7d] bg-white text-[#274d7d] hover:bg-slate-50"
+        disabled={currentPage <= 1}
+        onClick={onPrevious}
+      >
+        {previousLabel}
+      </Button>
+      <div className="text-sm font-semibold text-slate-700">{pageIndicator}</div>
+      <Button
+        type="button"
+        variant="outline"
+        className="border-[#274d7d] bg-white text-[#274d7d] hover:bg-slate-50"
+        disabled={currentPage >= totalPages}
+        onClick={onNext}
+      >
+        {nextLabel}
+      </Button>
+    </div>
+  );
+}
+
 function InfoTile({
   label,
   value,
@@ -1377,6 +1627,90 @@ function DebugImageTile({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function BatchFailPreviewCard({
+  product,
+  row,
+  resultLabel,
+  errorLabel,
+  cycleTimeLabel,
+  roiLabel,
+  expectedTextLabel,
+  rawTextLabel,
+  viewDetailsLabel,
+  hideDetailsLabel,
+  emptyText,
+}: {
+  product: ProductProfile;
+  row: BatchTestReportRow;
+  resultLabel: string;
+  errorLabel: string;
+  cycleTimeLabel: string;
+  roiLabel: string;
+  expectedTextLabel: string;
+  rawTextLabel: string;
+  viewDetailsLabel: string;
+  hideDetailsLabel: string;
+  emptyText: string;
+}) {
+  return (
+    <div className="overflow-hidden border border-slate-200 bg-slate-50">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-3 py-2">
+        <div className="min-w-0">
+          <div className="truncate font-semibold text-slate-950">
+            {row.relativePath}
+          </div>
+          <div className="text-xs text-slate-500">
+            {resultLabel}: {row.result}
+            {" / "}
+            {cycleTimeLabel}: {row.cycleTimeMs !== null ? `${row.cycleTimeMs} ms` : "-"}
+          </div>
+        </div>
+        <Badge
+          className={
+            row.result === "NG"
+              ? "border-red-200 bg-red-50 text-red-700"
+              : row.result === "ERROR"
+                ? "border-slate-200 bg-slate-100 text-slate-700"
+                : "border-amber-200 bg-amber-50 text-amber-700"
+          }
+        >
+          {row.result}
+        </Badge>
+      </div>
+
+      <div className="p-3">
+        <TestFailImagePreview
+          imageSrc={row.originalImageBase64}
+          product={product}
+          slots={row.slots}
+        />
+      </div>
+      <RoiResultDetailsDropdown
+        items={product.roiRegions.map((region) => {
+          const slot = row.slots.find((item) => item.slotIndex === region.index);
+
+          return {
+            key: `${row.relativePath}-${region.index}`,
+            title: `${roiLabel} ${region.index}`,
+            result: slot?.result ?? "UNKNOWN",
+            expectedText: slot?.expectedText ?? product.code,
+            rawText: slot?.rawText ?? "-",
+            errorMessage: slot?.errorMessage ?? "-",
+          };
+        })}
+        emptyText={emptyText}
+        summary={`${errorLabel}: ${row.errorMessage ?? "-"}`}
+        viewLabel={viewDetailsLabel}
+        hideLabel={hideDetailsLabel}
+        resultLabel={resultLabel}
+        expectedTextLabel={expectedTextLabel}
+        rawTextLabel={rawTextLabel}
+        errorLabel={errorLabel}
+      />
     </div>
   );
 }
@@ -1444,6 +1778,65 @@ async function compressImageForReport(
 
 function cloneRoiRegions(regions: RoiRegion[]) {
   return regions.map((region) => ({ ...region }));
+}
+
+function areRoiRegionsEqual(first: RoiRegion[], second: RoiRegion[]) {
+  if (first.length !== second.length) {
+    return false;
+  }
+
+  return first.every((region, index) => {
+    const other = second[index];
+
+    if (!other) {
+      return false;
+    }
+
+    return (
+      region.index === other.index &&
+      region.x === other.x &&
+      region.y === other.y &&
+      region.width === other.width &&
+      region.height === other.height &&
+      region.rotation === other.rotation
+    );
+  });
+}
+
+function buildLineTestProductPayload(
+  product: ProductProfile,
+  roiRegions: RoiRegion[],
+): ProductProfilePayload {
+  return {
+    code: product.code,
+    name: product.name,
+    defaultNumber: product.defaultNumber,
+    batchSize: product.batchSize,
+    exposure: product.exposure,
+    thresholdAccept: product.thresholdAccept,
+    thresholdMns: product.thresholdMns,
+    rowThreshold: product.rowThreshold,
+    modelPath: product.modelPath ?? undefined,
+    rotateTestImageClockwise: product.rotateTestImageClockwise,
+    active: product.active,
+    camera: {
+      ...product.camera,
+      deviceName: product.camera.deviceName?.trim() || undefined,
+      rtspUrl: product.camera.rtspUrl?.trim() || undefined,
+    },
+    roiRegions,
+  };
+}
+
+function formatDateTime(value: string) {
+  return new Intl.DateTimeFormat("en-GB", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(value));
 }
 
 async function cropProductRois(imageBase64: string, product: ProductProfile) {
@@ -1619,15 +2012,4 @@ function formatNumber(value: number, maximumFractionDigits = 1) {
   return new Intl.NumberFormat("en-US", {
     maximumFractionDigits,
   }).format(value);
-}
-
-function formatDateTime(value: string) {
-  return new Intl.DateTimeFormat("en-GB", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(new Date(value));
 }

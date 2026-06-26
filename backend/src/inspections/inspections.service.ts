@@ -103,6 +103,8 @@ export class InspectionsService {
         })),
         thresholdAccept: Number(product.thresholdAccept),
         thresholdMns: Number(product.thresholdMns),
+        rowThreshold: product.rowThreshold,
+        rotateImageClockwise: product.rotateTestImageClockwise,
       });
 
       const capturedAt = new Date();
@@ -196,6 +198,8 @@ export class InspectionsService {
       })),
       thresholdAccept: Number(product.thresholdAccept),
       thresholdMns: Number(product.thresholdMns),
+      rowThreshold: product.rowThreshold,
+      rotateImageClockwise: product.rotateTestImageClockwise,
     });
     const expectedText = product.code.trim().toUpperCase();
 
@@ -379,8 +383,11 @@ export class InspectionsService {
     };
   }
 
-  async listTestSessionReports(limit = 10) {
+  async listTestSessionReports(limit = 10, page = 1) {
     const safeLimit = Math.max(1, Math.min(50, Math.trunc(limit) || 10));
+    const safePage = Math.max(1, Math.trunc(page) || 1);
+    const offset = (safePage - 1) * safeLimit;
+    const total = await this.prisma.testSessionReport.count();
     const reports = await this.prisma.$queryRaw<
       Array<{
         id: string;
@@ -414,11 +421,20 @@ export class InspectionsService {
       INNER JOIN "Product" AS product ON product."id" = report."productId"
       INNER JOIN "User" AS actor ON actor."id" = report."actorId"
       ORDER BY report."createdAt" DESC
+      OFFSET ${offset}
       LIMIT ${safeLimit}
     `;
 
     if (reports.length === 0) {
-      return { data: [] };
+      return {
+        data: [],
+        meta: {
+          page: safePage,
+          limit: safeLimit,
+          total,
+          totalPages: Math.max(1, Math.ceil(total / safeLimit)),
+        },
+      };
     }
 
     const reportIds = reports.map((report) => report.id);
@@ -431,6 +447,7 @@ export class InspectionsService {
         result: string;
         cycleTimeMs: number | null;
         errorMessage: string | null;
+        originalImageBase64: string | null;
         createdAt: Date;
       }>
     >(
@@ -443,6 +460,7 @@ export class InspectionsService {
           image."result"::text AS "result",
           image."cycleTimeMs",
           image."errorMessage",
+          image."originalImageBase64",
           image."createdAt"
         FROM "TestSessionFailedImage" AS image
         WHERE image."reportId" IN (${Prisma.join(reportIds)})
@@ -518,6 +536,7 @@ export class InspectionsService {
         result: string;
         cycleTimeMs: number | null;
         errorMessage: string | null;
+        originalImageBase64: string | null;
         roiResults: Array<{
           slotIndex: number | null;
           slotLabel: string | null;
@@ -538,6 +557,7 @@ export class InspectionsService {
         result: image.result,
         cycleTimeMs: image.cycleTimeMs,
         errorMessage: image.errorMessage,
+        originalImageBase64: image.originalImageBase64,
         roiResults: roiByImageId.get(image.id) ?? [],
       });
       failedImagesByReportId.set(image.reportId, list);
@@ -559,6 +579,12 @@ export class InspectionsService {
         failedImages: failedImagesByReportId.get(report.id) ?? [],
         createdAt: report.createdAt.toISOString(),
       })),
+      meta: {
+        page: safePage,
+        limit: safeLimit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / safeLimit)),
+      },
     };
   }
 

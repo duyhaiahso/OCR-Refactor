@@ -151,6 +151,13 @@ export class CreateProductProfileDto {
   @Max(1)
   thresholdMns!: number;
 
+  @ApiPropertyOptional({ example: 20, default: 20 })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(500)
+  rowThreshold?: number;
+
   @ApiPropertyOptional({ example: 'models/SL-40_150_0.998.pt' })
   @IsOptional()
   @IsString()

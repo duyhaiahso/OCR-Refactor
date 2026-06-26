@@ -58,6 +58,8 @@ type DeviceToolInspectionRequest = {
   roiRegions: RoiRegionDto[];
   thresholdAccept: number;
   thresholdMns: number;
+  rowThreshold: number;
+  rotateImageClockwise: boolean;
 };
 
 type DeviceToolImageInspectionRequest = Omit<
@@ -357,6 +359,8 @@ export class DeviceToolService {
       roiRegions: request.roiRegions,
       thresholdAccept: request.thresholdAccept,
       thresholdMns: request.thresholdMns,
+      rowThreshold: request.rowThreshold,
+      rotateImageClockwise: request.rotateImageClockwise,
       grabFromCamera: true,
     });
   }
@@ -366,6 +370,7 @@ export class DeviceToolService {
       modelPath: request.modelPath,
       thresholdAccept: request.thresholdAccept,
       thresholdMns: request.thresholdMns,
+      rowThreshold: request.rowThreshold,
     });
 
     const startedAt = Date.now();
@@ -408,6 +413,7 @@ export class DeviceToolService {
       modelPath: request.modelPath,
       thresholdAccept: request.thresholdAccept,
       thresholdMns: request.thresholdMns,
+      rowThreshold: request.rowThreshold,
     });
 
     const response = await this.requestJson<DeviceToolActionResponse>(
@@ -418,8 +424,12 @@ export class DeviceToolService {
           rois: request.roiRegions.map((region) => ({
             x: Math.max(0, Math.round(region.x - region.width / 2)),
             y: Math.max(0, Math.round(region.y - region.height / 2)),
-            w: region.width,
-            h: region.height,
+            width: region.width,
+            height: region.height,
+            rotation: Number(region.rotation),
+            rotate_clockwise:
+              request.rotateImageClockwise ||
+              this.shouldRotateClockwise(region.rotation),
           })),
         }),
       },
@@ -445,6 +455,7 @@ export class DeviceToolService {
     modelPath: string;
     thresholdAccept: number;
     thresholdMns: number;
+    rowThreshold: number;
   }) {
     const response = await this.requestJson<DeviceToolActionResponse>(
       this.getToolPath('/AI/yolo_ocr/load_model'),
@@ -454,7 +465,7 @@ export class DeviceToolService {
           model_path: request.modelPath,
           conf: request.thresholdAccept,
           iou: request.thresholdMns,
-          row_threshold: 20,
+          row_threshold: request.rowThreshold,
         }),
       },
       'load OCR model',
@@ -482,6 +493,8 @@ export class DeviceToolService {
     roiRegions: RoiRegionDto[];
     thresholdAccept: number;
     thresholdMns: number;
+    rowThreshold: number;
+    rotateImageClockwise: boolean;
     grabFromCamera: boolean;
     imageBase64?: string;
   }) {
@@ -500,11 +513,13 @@ export class DeviceToolService {
             width: region.width,
             height: region.height,
             rotation: Number(region.rotation),
-            rotate_clockwise: this.shouldRotateClockwise(region.rotation),
+            rotate_clockwise:
+              request.rotateImageClockwise ||
+              this.shouldRotateClockwise(region.rotation),
           })),
           acceptance_threshold_ocr: request.thresholdAccept,
           duplication_threshold_ocr: request.thresholdMns,
-          row_threshold: 20,
+          row_threshold: request.rowThreshold,
         }),
       },
       'run ROI OCR',

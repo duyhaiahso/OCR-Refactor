@@ -1218,6 +1218,7 @@ function buildProductPayload(
     exposure: product.exposure,
     thresholdAccept: product.thresholdAccept,
     thresholdMns: product.thresholdMns,
+    rowThreshold: product.rowThreshold,
     modelPath: product.modelPath ?? undefined,
     active: product.active,
     camera: {

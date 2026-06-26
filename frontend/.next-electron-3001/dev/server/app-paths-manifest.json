@@ -1,6 +1,7 @@
 {
-  "/login/page": "app/login/page.js",
-  "/dashboard/page": "app/dashboard/page.js",
-  "/dashboard/products/page": "app/dashboard/products/page.js",
-  "/dashboard/line-test/page": "app/dashboard/line-test/page.js"
+  "/dashboard/settings/page": "app/dashboard/settings/page.js",
+  "/dashboard/line-test/page": "app/dashboard/line-test/page.js",
+  "/dashboard/reports/page": "app/dashboard/reports/page.js",
+  "/dashboard/camera/page": "app/dashboard/camera/page.js",
+  "/dashboard/products/page": "app/dashboard/products/page.js"
 }

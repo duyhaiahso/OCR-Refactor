@@ -476,3 +476,4 @@ function StateRow({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
+

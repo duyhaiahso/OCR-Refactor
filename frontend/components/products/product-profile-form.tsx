@@ -89,6 +89,7 @@ const defaultDraft: ProductProfilePayload = {
   exposure: 3500,
   thresholdAccept: 0.5,
   thresholdMns: 0.5,
+  rowThreshold: 20,
   modelPath: "",
   rotateTestImageClockwise: false,
   active: true,
@@ -133,6 +134,7 @@ function toDraft(product?: ProductProfile | null): ProductProfilePayload {
     exposure: product.exposure,
     thresholdAccept: product.thresholdAccept,
     thresholdMns: product.thresholdMns,
+    rowThreshold: product.rowThreshold,
     modelPath: product.modelPath ?? "",
     rotateTestImageClockwise: product.rotateTestImageClockwise,
     active: product.active,
@@ -1047,6 +1049,7 @@ export function ProductProfileForm({
       exposure: source.exposure,
       thresholdAccept: source.thresholdAccept,
       thresholdMns: source.thresholdMns,
+      rowThreshold: source.rowThreshold,
       active: source.active,
       camera: {
         ...source.camera,
