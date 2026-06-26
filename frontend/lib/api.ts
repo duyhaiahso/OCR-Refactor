@@ -175,6 +175,7 @@ export type ProductProfile = {
   exposure: number;
   thresholdAccept: number;
   thresholdMns: number;
+  rowThreshold: number;
   modelPath: string | null;
   rotateTestImageClockwise: boolean;
   active: boolean;
@@ -291,6 +292,7 @@ export type TestSessionReportListItem = {
     result: TestSessionImageResult;
     cycleTimeMs: number | null;
     errorMessage: string | null;
+    originalImageBase64: string | null;
     roiResults: Array<{
       slotIndex: number | null;
       slotLabel: string | null;
@@ -301,6 +303,16 @@ export type TestSessionReportListItem = {
     }>;
   }>;
   createdAt: string;
+};
+
+export type PaginatedTestSessionReportsResponse = {
+  data: TestSessionReportListItem[];
+  meta: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
 };
 
 export type CurrentInspectionState = {
@@ -336,6 +348,7 @@ export type ProductProfilePayload = {
   exposure: number;
   thresholdAccept: number;
   thresholdMns: number;
+  rowThreshold?: number;
   modelPath?: string;
   rotateTestImageClockwise?: boolean;
   active: boolean;
@@ -351,6 +364,14 @@ export type ApplyProductProfilePayload = {
 
 export type BulkProductOcrTestSettingsPayload = {
   rotateTestImageClockwise: boolean;
+  applyToAll: boolean;
+  productIds?: string[];
+};
+
+export type BulkProductAiSettingsPayload = {
+  thresholdAccept: number;
+  thresholdMns: number;
+  rowThreshold: number;
   applyToAll: boolean;
   productIds?: string[];
 };
@@ -496,9 +517,10 @@ export async function createTestSessionReport(
 export async function listTestSessionReports(
   accessToken: string,
   limit = 10,
+  page = 1,
 ) {
   const response = await fetch(
-    `${API_BASE_URL}/inspections/test-sessions?limit=${limit}`,
+    `${API_BASE_URL}/inspections/test-sessions?limit=${limit}&page=${page}`,
     {
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -510,7 +532,7 @@ export async function listTestSessionReports(
     throw new ApiError(await parseError(response), response.status);
   }
 
-  return (await response.json()) as { data: TestSessionReportListItem[] };
+  return (await response.json()) as PaginatedTestSessionReportsResponse;
 }
 
 export async function getSystemLicense(accessToken: string) {
@@ -968,6 +990,26 @@ export async function bulkUpdateProductOcrTestSettings(
   payload: BulkProductOcrTestSettingsPayload,
 ) {
   const response = await fetch(`${API_BASE_URL}/products/ocr-test-settings/apply`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new ApiError(await parseError(response), response.status);
+  }
+
+  return (await response.json()) as { data: { updatedCount: number } };
+}
+
+export async function bulkUpdateProductAiSettings(
+  accessToken: string,
+  payload: BulkProductAiSettingsPayload,
+) {
+  const response = await fetch(`${API_BASE_URL}/products/ai-settings/apply`, {
     method: "PATCH",
     headers: {
       Authorization: `Bearer ${accessToken}`,

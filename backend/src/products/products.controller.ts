@@ -20,6 +20,7 @@ import { CurrentUser } from '../auth/current-user.decorator';
 import { PERMISSIONS } from '../common/constants/permissions';
 import type { AuthenticatedRequest } from '../common/types/authenticated-request';
 import { ApplyProductProfileDto } from './dto/apply-product-profile.dto';
+import { BulkUpdateProductAiSettingsDto } from './dto/bulk-update-product-ai-settings.dto';
 import { BulkUpdateProductOcrTestSettingsDto } from './dto/bulk-update-product-ocr-test-settings.dto';
 import { CreateProductProfileDto } from './dto/product-profile.dto';
 import { UpdateProductBatchSizeDto } from './dto/update-product-batch-size.dto';
@@ -85,6 +86,15 @@ export class ProductsController {
     }
 
     return this.productsService.bulkUpdateProductOcrTestSettings(dto);
+  }
+
+  @ApiOperation({
+    summary: 'Bulk update AI OCR settings for product profiles',
+  })
+  @Patch('ai-settings/apply')
+  @RequirePermissions(PERMISSIONS.PRODUCT_MANAGE)
+  bulkUpdateProductAiSettings(@Body() dto: BulkUpdateProductAiSettingsDto) {
+    return this.productsService.bulkUpdateProductAiSettings(dto);
   }
 
   @ApiOperation({ summary: 'Update OCR test settings for a product profile' })

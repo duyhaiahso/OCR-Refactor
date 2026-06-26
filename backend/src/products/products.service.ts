@@ -7,6 +7,7 @@ import {
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
 import { ApplyProductProfileDto } from './dto/apply-product-profile.dto';
+import { BulkUpdateProductAiSettingsDto } from './dto/bulk-update-product-ai-settings.dto';
 import { BulkUpdateProductOcrTestSettingsDto } from './dto/bulk-update-product-ocr-test-settings.dto';
 import {
   CameraProfileDto,
@@ -66,6 +67,7 @@ export class ProductsService {
         exposure: dto.exposure,
         thresholdAccept: dto.thresholdAccept,
         thresholdMns: dto.thresholdMns,
+        rowThreshold: dto.rowThreshold ?? 20,
         modelPath: dto.modelPath || null,
         rotateTestImageClockwise: dto.rotateTestImageClockwise ?? false,
         active: dto.active,
@@ -109,6 +111,7 @@ export class ProductsService {
           exposure: dto.exposure,
           thresholdAccept: dto.thresholdAccept,
           thresholdMns: dto.thresholdMns,
+          rowThreshold: dto.rowThreshold,
           modelPath:
             dto.modelPath === undefined ? undefined : dto.modelPath || null,
           rotateTestImageClockwise: dto.rotateTestImageClockwise,
@@ -218,6 +221,33 @@ export class ProductsService {
     const result = await this.prisma.product.updateMany({
       where,
       data: { rotateTestImageClockwise: dto.rotateTestImageClockwise },
+    });
+
+    return { data: { updatedCount: result.count } };
+  }
+
+  async bulkUpdateProductAiSettings(dto: BulkUpdateProductAiSettingsDto) {
+    if (!dto.applyToAll && (!dto.productIds || dto.productIds.length === 0)) {
+      throw new BadRequestException('Target products are required');
+    }
+
+    const productIds = dto.applyToAll
+      ? undefined
+      : Array.from(new Set(dto.productIds));
+    const where = productIds ? { id: { in: productIds } } : undefined;
+    const targetCount = await this.prisma.product.count({ where });
+
+    if (targetCount === 0) {
+      throw new BadRequestException('No target products found');
+    }
+
+    const result = await this.prisma.product.updateMany({
+      where,
+      data: {
+        thresholdAccept: dto.thresholdAccept,
+        thresholdMns: dto.thresholdMns,
+        rowThreshold: dto.rowThreshold,
+      },
     });
 
     return { data: { updatedCount: result.count } };
@@ -480,6 +510,7 @@ export class ProductsService {
       exposure: product.exposure,
       thresholdAccept: Number(product.thresholdAccept),
       thresholdMns: Number(product.thresholdMns),
+      rowThreshold: product.rowThreshold,
       modelPath: product.modelPath,
       rotateTestImageClockwise: product.rotateTestImageClockwise,
       active: product.active,

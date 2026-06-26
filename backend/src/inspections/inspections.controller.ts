@@ -70,8 +70,14 @@ export class InspectionsController {
     PERMISSIONS.INSPECTION_START,
     PERMISSIONS.CAMERA_MANAGE,
   )
-  listTestSessionReports(@Query('limit') limit?: string) {
-    return this.inspectionsService.listTestSessionReports(Number(limit) || 10);
+  listTestSessionReports(
+    @Query('limit') limit?: string,
+    @Query('page') page?: string,
+  ) {
+    return this.inspectionsService.listTestSessionReports(
+      Number(limit) || 10,
+      Number(page) || 1,
+    );
   }
 
   @ApiOperation({ summary: 'Get the current running inspection job' })

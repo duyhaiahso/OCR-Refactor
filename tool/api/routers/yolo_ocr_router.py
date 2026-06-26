@@ -72,7 +72,7 @@ class Roi(BaseModel):
 class DetectStartRequest(BaseModel):
     """Tham số bật B. rois: 1 ROI hoặc list ROI; bỏ trống = detect toàn frame."""
 
-    rois: Optional[Union[Roi, List[Roi]]] = None
+    rois: Optional[Union["OCRRoiRequestItem", List["OCRRoiRequestItem"]]] = None
 
 
 class OCRRoiRequestItem(BaseModel):
@@ -333,7 +333,18 @@ async def detect_start(
         rois = None
         if body is not None and body.rois is not None:
             items = body.rois if isinstance(body.rois, list) else [body.rois]
-            rois = [r.to_box() for r in items]
+            rois = [
+                {
+                    "label": item.label,
+                    "x": int(item.x),
+                    "y": int(item.y),
+                    "w": int(item.width),
+                    "h": int(item.height),
+                    "rotation": float(item.rotation),
+                    "rotate_clockwise": bool(item.rotate_clockwise),
+                }
+                for item in items
+            ]
         manager.get(cam_id).start_detector(detector, DETECTOR_NAME, rois)
         return {"success": True, "rois": rois}
     except ToolError as e:
@@ -374,3 +385,4 @@ async def detect_results(websocket: WebSocket, cam_id: str) -> None:
         logger.error("[yolo_ocr results:%s] lỗi: %s", cam_id, e)
     finally:
         session.results_channel.close()
+

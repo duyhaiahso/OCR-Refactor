@@ -96,6 +96,8 @@ export class CameraController {
       roiRegions: product.roiRegions,
       thresholdAccept: product.thresholdAccept,
       thresholdMns: product.thresholdMns,
+      rowThreshold: product.rowThreshold,
+      rotateImageClockwise: product.rotateTestImageClockwise,
     });
   }
 
@@ -135,6 +137,8 @@ export class CameraController {
       modelPath: product.modelPath,
       thresholdAccept: Number(product.thresholdAccept),
       thresholdMns: Number(product.thresholdMns),
+      rowThreshold: product.rowThreshold,
+      rotateTestImageClockwise: product.rotateTestImageClockwise,
       camera: {
         sourceType: product.cameraConfig.sourceType,
         deviceName: product.cameraConfig.deviceName ?? undefined,

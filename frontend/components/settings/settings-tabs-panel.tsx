@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { AiSettingsPanel } from "@/components/settings/ai-settings-panel";
 import { DesktopSettingsPanel } from "@/components/settings/desktop-settings-panel";
 import { LanguageSettingsPanel } from "@/components/settings/language-settings-panel";
 import { OcrTestSettingsPanel } from "@/components/settings/ocr-test-settings-panel";
@@ -8,12 +9,16 @@ import { VolumeSettingsPanel } from "@/components/settings/volume-settings-panel
 import { useI18n } from "@/lib/i18n";
 import { getStoredUser } from "@/lib/session";
 
-type SettingsTab = "desktop" | "language" | "volume" | "ocr-test";
+type SettingsTab = "desktop" | "language" | "volume" | "ai" | "ocr-test";
 
 export function SettingsTabsPanel() {
   const { t } = useI18n();
   const currentRole =
     typeof window === "undefined" ? null : getStoredUser()?.role ?? null;
+  const canManageAiSettings =
+    currentRole === "dev" ||
+    currentRole === "admin" ||
+    currentRole === "engineer";
   const canManageOcrTestSettings = currentRole === "dev";
   const [activeTab, setActiveTab] = useState<SettingsTab>("desktop");
 
@@ -35,6 +40,13 @@ export function SettingsTabsPanel() {
           label={t("settings.tabVolume")}
           onClick={() => setActiveTab("volume")}
         />
+        {canManageAiSettings ? (
+          <TabButton
+            active={activeTab === "ai"}
+            label={t("settings.tabAi")}
+            onClick={() => setActiveTab("ai")}
+          />
+        ) : null}
         {canManageOcrTestSettings ? (
           <TabButton
             active={activeTab === "ocr-test"}
@@ -47,6 +59,7 @@ export function SettingsTabsPanel() {
       {activeTab === "desktop" ? <DesktopSettingsPanel /> : null}
       {activeTab === "language" ? <LanguageSettingsPanel /> : null}
       {activeTab === "volume" ? <VolumeSettingsPanel /> : null}
+      {canManageAiSettings && activeTab === "ai" ? <AiSettingsPanel /> : null}
       {canManageOcrTestSettings && activeTab === "ocr-test" ? (
         <OcrTestSettingsPanel />
       ) : null}

@@ -283,6 +283,7 @@ export function OperatorRoiEditor({
     event: PointerEvent<HTMLDivElement>,
     index: number,
   ) {
+    event.preventDefault();
     event.stopPropagation();
     const element = event.currentTarget;
     safeSetPointerCapture(element, event.pointerId);
@@ -311,6 +312,7 @@ export function OperatorRoiEditor({
     index: number,
     corner: ResizeCorner,
   ) {
+    event.preventDefault();
     event.stopPropagation();
     const element = event.currentTarget;
     safeSetPointerCapture(element, event.pointerId);
@@ -384,6 +386,7 @@ export function OperatorRoiEditor({
     event: PointerEvent<HTMLButtonElement>,
     index: number,
   ) {
+    event.preventDefault();
     event.stopPropagation();
     const region = roiRegions.find((r) => r.index === index);
     if (!region) return;
@@ -447,27 +450,23 @@ export function OperatorRoiEditor({
       const anchor = resizingRegion.anchor;
       const direction = getResizeDirection(resizingRegion.corner);
 
-      const centerToAnchorWorld = { x: anchor.x - point.x, y: anchor.y - point.y };
-      const centerToAnchorLocal = inverseRotateVector(
-        centerToAnchorWorld,
+      const localVector = inverseRotateVector(
+        {
+          x: point.x - anchor.x,
+          y: point.y - anchor.y,
+        },
         resizingRegion.rotation,
       );
 
-      const newWidth = Math.max(
-        20,
-        Math.min(centerToAnchorLocal.x * -2 * direction.x, cameraWidth),
-      );
-      const newHeight = Math.max(
-        20,
-        Math.min(centerToAnchorLocal.y * -2 * direction.y, cameraHeight),
-      );
+      const newWidth = Math.max(20, direction.x * localVector.x);
+      const newHeight = Math.max(20, direction.y * localVector.y);
 
       const localOffset = {
         x: (newWidth / 2) * direction.x,
         y: (newHeight / 2) * direction.y,
       };
       const worldOffset = rotateVector(localOffset, resizingRegion.rotation);
-      const newCenter = { x: anchor.x - worldOffset.x, y: anchor.y - worldOffset.y };
+      const newCenter = { x: anchor.x + worldOffset.x, y: anchor.y + worldOffset.y };
 
       const clampedCenter = clampRegionCenter(
         { ...region, width: newWidth, height: newHeight },

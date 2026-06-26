@@ -191,17 +191,38 @@ class CameraSession:
 
         h_img, w_img = frame.shape[:2]
         out = []
-        for (x, y, w, h) in rois:
+        for roi in rois:
+            x = int(roi.get("x", 0))
+            y = int(roi.get("y", 0))
+            w = int(roi.get("w", 0))
+            h = int(roi.get("h", 0))
+            rotation = float(roi.get("rotation", 0.0) or 0.0)
+            rotate_clockwise = bool(roi.get("rotate_clockwise", False))
+            label = roi.get("label")
             box = {"x": x, "y": y, "w": w, "h": h}
             x0, y0 = max(0, x), max(0, y)
             x1, y1 = min(w_img, x + w), min(h_img, y + h)
             if x1 <= x0 or y1 <= y0:
-                out.append({"roi": box, "success": False, "error": "ROI ngoài khung"})
+                out.append({"roi": box, "label": label, "success": False, "error": "ROI ngoài khung"})
                 continue
-            crop = frame[y0:y1, x0:x1]
-            out.append({"roi": box, **detector.infer(crop)})
+            if rotation:
+                cx = x + w / 2
+                cy = y + h / 2
+                matrix = cv2.getRotationMatrix2D((float(cx), float(cy)), rotation, 1.0)
+                rotated_full = cv2.warpAffine(
+                    frame,
+                    matrix,
+                    (w_img, h_img),
+                    flags=cv2.INTER_LINEAR,
+                    borderMode=cv2.BORDER_REPLICATE,
+                )
+                crop = rotated_full[y0:y1, x0:x1]
+            else:
+                crop = frame[y0:y1, x0:x1]
+            if rotate_clockwise and not rotation:
+                crop = cv2.rotate(crop, cv2.ROTATE_90_CLOCKWISE)
+            out.append({"roi": box, "label": label, **detector.infer(crop)})
         return {"rois": out}
-
     # -- chụp đơn --------------------------------------------------------
     def grab_jpeg(self) -> Optional[bytes]:
         """Chụp 1 frame, trả JPEG bytes (cho REST grab — encode đồng bộ)."""
@@ -291,3 +312,4 @@ class CameraManager:
                 s.close()
             except Exception as e:
                 logger.error("Lỗi đóng camera %s: %s", s.tool.tool_id, e)
+
